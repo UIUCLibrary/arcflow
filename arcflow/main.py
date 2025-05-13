@@ -57,6 +57,8 @@ class ArcFlow:
             if not self.force_update:
                 self.log.error('File .arcflow.yml not found. Create the file and try again or run with --force-update to recreate EADs from scratch.')
                 exit(0)
+            else:
+                self.last_updated = datetime.fromtimestamp(0, timezone.utc)
         try:
             with open('.archivessnake.yml', 'r') as file:
                 config = yaml.safe_load(file)
@@ -64,12 +66,16 @@ class ArcFlow:
             self.log.error('File .archivessnake.yml not found. Create the file.')
             exit(0)
 
-        self.client = ASnakeClient(
-            username=config['username'],
-            password=config['password'],
-            baseurl=config['baseurl'],
-        )
-        self.client.authorize()
+        try:
+            self.client = ASnakeClient(
+                username=config['username'],
+                password=config['password'],
+                baseurl=config['baseurl'],
+            )
+            self.client.authorize()
+        except Exception as e:
+            self.log.error(f'Error authorizing ASnakeClient: {e}')
+            exit(0)
 
     def is_running(self):
         """
@@ -314,22 +320,24 @@ class ArcFlow:
             with open(ead_file_path, 'wb') as file:
                 file.write(ead_content)
                 self.log.info(f'{indent}Saved file {ead_file_path}.')
-                # add to solr after successful save
-                try:
-                    result = subprocess.run(
-                        f'FILE={ead_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id} bundle exec rails arclight:index',
-                        shell=True,
-                        cwd=self.arclight_dir,
-                        capture_output=True,)
-                    if result.returncode == 0:
-                        self.log.info(f'{indent}Updated EAD "{ead_id}" in ArcLight Solr.')
-                    else:
-                        self.log.error(f'{indent}Failed to update EAD "{ead_id}" in ArcLight Solr. Return code: {result.returncode}')
-                        self.log.error(f'{indent}Error message: {result.stderr.decode("utf-8")}')
-                except subprocess.CalledProcessError as e:
-                    self.log.error(f'{indent}Error updating EAD "{ead_id}" in ArcLight Solr: {e}')
         except Exception as e:
             self.log.error(f'{indent}Error writing to file {ead_file_path}: {e}')
+
+        # add to solr after successful save
+        try:
+            result = subprocess.run(
+                f'FILE={ead_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id} bundle exec rails arclight:index',
+                shell=True,
+                cwd=self.arclight_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,)
+            if result.returncode == 0:
+                self.log.info(f'{indent}Updated EAD "{ead_id}" in ArcLight Solr.')
+            else:
+                self.log.error(f'{indent}Failed to update EAD "{ead_id}" in ArcLight Solr. Return code: {result.returncode}')
+                self.log.error(f'{indent}Error message: {result.stderr.decode("utf-8")}')
+        except subprocess.CalledProcessError as e:
+            self.log.error(f'{indent}Error updating EAD "{ead_id}" in ArcLight Solr: {e}')
 
     def delete_ead(self, ead_file_path, ead_id, indent=0):
         indent = ' ' * indent
