@@ -30,6 +30,10 @@ class ArcFlow:
     """
 
     def __init__(self, arclight_dir, solr_url, force_update=False):
+        self.solr_url = solr_url
+        self.arclight_dir = arclight_dir
+        self.force_update = force_update
+
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -50,21 +54,22 @@ class ArcFlow:
                 self.log.error(f'Error parsing last_updated date on file .arcflow.yml: {e}')
                 exit(0)
         except FileNotFoundError:
-            self.log.error('File .arcflow.yml not found. Create a new one and try again or run with --force_update to recreate EADs from scratch.')
+            if not self.force_update:
+                self.log.error('File .arcflow.yml not found. Create the file and try again or run with --force-update to recreate EADs from scratch.')
+                exit(0)
+        try:
+            with open('.archivessnake.yml', 'r') as file:
+                config = yaml.safe_load(file)
+        except FileNotFoundError:
+            self.log.error('File .archivessnake.yml not found. Create the file.')
             exit(0)
 
-        with open('.archivessnake.yml', 'r') as file:
-            config = yaml.safe_load(file)
         self.client = ASnakeClient(
             username=config['username'],
             password=config['password'],
             baseurl=config['baseurl'],
         )
         self.client.authorize()
-
-        self.solr_url = solr_url
-        self.arclight_dir = arclight_dir
-        self.force_update = force_update
 
     def is_running(self):
         """
