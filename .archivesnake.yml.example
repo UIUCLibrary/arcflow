@@ -1,0 +1,3 @@
+baseurl: 'http://localhost:8089'
+username: 'user'
+password: 'password'
