@@ -127,59 +127,60 @@ class ArcFlow:
             with open(repos_file_path, 'w') as file:
                 self.log.info(f'Updating file {repos_file_path}...')
                 for repo in repos:
-                    agent_representation = self.client.get(
-                        repo['agent_representation']['ref']).json()
+                    if repo['publish']:
+                        agent_representation = self.client.get(
+                            repo['agent_representation']['ref']).json()
 
-                    contact = agent_representation['agent_contacts'][0]
+                        contact = agent_representation['agent_contacts'][0]
 
-                    telephones = [
-                        f'<div class="al-repository-contact-{x["number_type"]}">{x["number"]}</div>'
-                        for x in contact['telephones']
-                    ]
-                    repo['contact_html'] = telephones
-                    if 'email' in contact:
-                        repo['contact_html'].append(
-                            f'<div class="al-repository-contact-info"><a href="mailto:{contact["email"]}">{contact["email"]}</a></div>'
-                        )
-                    repo['contact_html'] = ''.join(repo['contact_html'])
-
-                    city_state_zip_country = []
-                    for x in ('city', 'region', 'country'):
-                        if x in contact:
-                            if x == 'region' and 'post_code' in contact:
-                                city_state_zip_country.append(
-                                    f'{contact[x]} {contact["post_code"]}')
-                            else:
-                                city_state_zip_country.append(f'{contact[x]}')
-
-                    repo['location_html'] = []
-                    if 'address_1' in contact:
-                        repo['location_html'].append(
-                            f'<div class="al-repository-street-address-building">{contact["address_1"]}</div>')
-                    if 'address_2' in contact:
-                        repo['location_html'].append(
-                            f'<div class="al-repository-street-address-address1">{contact["address_2"]}</div>')
-                    if city_state_zip_country:
-                        repo['location_html'].append(
-                            f'<div class="al-repository-street-address-city_state_zip_country">{", ".join(city_state_zip_country)}</div>')
-                    repo['location_html'] = ''.join(repo['location_html'])
-
-                    if 'image_url' in repo:
-                        repo['thumbnail_url'] = repo['image_url']
-
-                    yaml.safe_dump({
-                        repo['slug']: {
-                            k:repo[k] if k in repo else "" 
-                            for k in (
-                                'name',
-                                'description',
-                                'contact_html',
-                                'location_html',
-                                'thumbnail_url',
-                                # 'request_types',
+                        telephones = [
+                            f'<div class="al-repository-contact-{x["number_type"]}">{x["number"]}</div>'
+                            for x in contact['telephones']
+                        ]
+                        repo['contact_html'] = telephones
+                        if 'email' in contact:
+                            repo['contact_html'].append(
+                                f'<div class="al-repository-contact-info"><a href="mailto:{contact["email"]}">{contact["email"]}</a></div>'
                             )
-                        },
-                    }, file, width=float('inf'))
+                        repo['contact_html'] = ''.join(repo['contact_html'])
+
+                        city_state_zip_country = []
+                        for x in ('city', 'region', 'country'):
+                            if x in contact:
+                                if x == 'region' and 'post_code' in contact:
+                                    city_state_zip_country.append(
+                                        f'{contact[x]} {contact["post_code"]}')
+                                else:
+                                    city_state_zip_country.append(f'{contact[x]}')
+
+                        repo['location_html'] = []
+                        if 'address_1' in contact:
+                            repo['location_html'].append(
+                                f'<div class="al-repository-street-address-building">{contact["address_1"]}</div>')
+                        if 'address_2' in contact:
+                            repo['location_html'].append(
+                                f'<div class="al-repository-street-address-address1">{contact["address_2"]}</div>')
+                        if city_state_zip_country:
+                            repo['location_html'].append(
+                                f'<div class="al-repository-street-address-city_state_zip_country">{", ".join(city_state_zip_country)}</div>')
+                        repo['location_html'] = ''.join(repo['location_html'])
+
+                        if 'image_url' in repo:
+                            repo['thumbnail_url'] = repo['image_url']
+
+                        yaml.safe_dump({
+                            repo['slug']: {
+                                k:repo[k] if k in repo else "" 
+                                for k in (
+                                    'name',
+                                    'description',
+                                    'contact_html',
+                                    'location_html',
+                                    'thumbnail_url',
+                                    # 'request_types',
+                                )
+                            },
+                        }, file, width=float('inf'))
         else:
             self.log.info(f'File {repos_file_path} is up to date.')
 
@@ -331,13 +332,10 @@ class ArcFlow:
                 f'FILE={ead_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id} bundle exec rails arclight:index',
                 shell=True,
                 cwd=self.arclight_dir,
-                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,)
-            if result.returncode == 0:
-                self.log.info(f'{indent}Updated EAD "{ead_id}" in ArcLight Solr.')
-            else:
+            self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
+            if result.returncode != 0:
                 self.log.error(f'{indent}Failed to update EAD "{ead_id}" in ArcLight Solr. Return code: {result.returncode}')
-                self.log.error(f'{indent}Error message: {result.stderr.decode("utf-8")}')
         except subprocess.CalledProcessError as e:
             self.log.error(f'{indent}Error updating EAD "{ead_id}" in ArcLight Solr: {e}')
 
