@@ -231,6 +231,7 @@ class ArcFlow:
                 resource = self.client.get(
                     f'{repo["uri"]}/resources/{resource_id}').json()
                 ead_file_path = f'{eads_repo_dir}/{resource_id}.xml'
+                # replace dots with dashes in EAD ID to avoid issues with Solr
                 ead_id = resource['ead_id'].replace('.', '-')
                 self.log.info(f'  Processing resource with ID {resource_id} ("{ead_id}")...')
 
@@ -291,7 +292,8 @@ class ArcFlow:
                     if ead_id is None:
                         self.log.error(f'    File {ead_file_path} was not found or does not contain an "eadid" tag. Unable to delete the associated EAD from Arclight Solr.')
                     else:
-                        self.delete_ead(ead_file_path, ead_id, indent=4)
+                        # replace dots with dashes in EAD ID to avoid issues with Solr
+                        self.delete_ead(ead_file_path, ead_id.replace('.', '-'), indent=4)
 
             if deleted_records['last_page'] == page:
                 break
