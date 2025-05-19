@@ -13,13 +13,15 @@ from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 
 base_dir = os.path.abspath((__file__) + "/../../")
+log_file = os.path.join(base_dir, 'logs/arcflow.log')
+os.makedirs(os.path.dirname(log_file), mode=0o755, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(levelname).1s - %(asctime)s - %(message)s',
     datefmt='%Y-%m-%dT%H:%M:%S%z',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(os.path.join(base_dir, 'arcflow.log')),
+        logging.FileHandler(log_file),
     ]
 )
 
