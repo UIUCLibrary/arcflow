@@ -1,3 +1,3 @@
 # ArcFlow
 
-Code to export data from ArchivesSpace to ArcLight.
+Code for exporting data from ArchivesSpace to ArcLight, along with additional utility scripts for data handling and transformation.
