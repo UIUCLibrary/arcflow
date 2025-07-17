@@ -31,7 +31,7 @@ def __get_asnake_client():
 def get_ead_from_csv(csv_file):
     """Function to extract EAD ID from a CSV file."""
     try:
-        with open(csv_file, 'r') as file:
+        with open(csv_file, 'r', encoding='utf8') as file:
             reader = csv.DictReader(file)
             for row in reader:
                 # Skip to third line
