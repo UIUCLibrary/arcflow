@@ -4,6 +4,7 @@ import yaml
 import json
 import csv
 import argparse
+import time
 from pathlib import Path
 from datetime import datetime
 from asnake.client import ASnakeClient
@@ -179,6 +180,48 @@ def save_report(path, report_list, validate_only):
         for row in report_list:
             writer.writerow(row)
 
+def check_job_status(client, repo_id, job_id):
+    while True:
+        job_status_response = client.get(f'/repositories/{repo_id}/jobs/{job_id}')
+        job_status = job_status_response.json()['status']
+
+        if job_status == 'completed':
+            print(f"Job {job_id} completed successfully!")
+            return True
+        elif job_status == 'failed':
+            print(f"Job {job_id} failed.")
+            return False
+        else:
+            pause = 15
+            print(f"Job {job_id} is still {job_status}. Waiting {pause} seconds...")
+            time.sleep(pause)
+
+def retrieve_job_output(path, report_list):
+    client = __get_asnake_client()
+    for row in report_list:
+        repo_id = row["repo_id"]
+        job_id = row["results_id"]
+        identifier = row["identifier"]
+        if not check_job_status(client, repo_id, job_id):
+            print(f"Error downloading files for job {job_id}")
+            continue
+        job_files = client.get(f"/repositories/{repo_id}/jobs/{job_id}/output_files").json()
+        output_file_id = max(job_files)
+        response = client.get(f"/repositories/{repo_id}/jobs/{job_id}/output_files/{output_file_id}")
+
+        output_file_name = "_".join([identifier, "job", str(job_id), str(output_file_id)]) +".csv"
+        
+        if response.status_code == 200:
+            output_save_path = os.path.join(path, "output")
+            if not os.path.exists(output_save_path):
+                os.makedirs(output_save_path)
+            output_file_path = os.path.join(output_save_path, output_file_name)
+            with open(output_file_path, "wb") as f:
+                f.write(response.content)
+            print(f"File {output_file_name} downloaded successfully.")
+        else:
+            print(f"Failed to retrieve file for identifier {identifier} and job id {job_id}. Status code: {response.status_code}")
+
 def main():
     parser = argparse.ArgumentParser(description='ArchivesSpace CSV Bulk Import Tool')
     parser.add_argument(
@@ -194,6 +237,10 @@ def main():
         '--only-validate',
         action='store_true',
         help='Force only validate',)
+    parser.add_argument(
+        '--save-output-files',
+        action='store_true',
+        help='Download job output files',)
     args = parser.parse_args()
 
     import_report = csv_bulk_import(
@@ -203,6 +250,8 @@ def main():
     
     save_report(args.dir, import_report, args.only_validate)
 
+    if args.save_output_files:
+        retrieve_job_output(args.dir, import_report)
 
 if __name__ == '__main__':
     main()
