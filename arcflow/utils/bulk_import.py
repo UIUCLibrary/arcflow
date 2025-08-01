@@ -4,6 +4,8 @@ import yaml
 import json
 import csv
 import argparse
+from pathlib import Path
+from datetime import datetime
 from asnake.client import ASnakeClient
 
 
@@ -64,6 +66,9 @@ def get_resource_id_from_ead(ead_id, asnake_client):
         print(f'Error searching for resource ID: {e}')
         return None
 
+def report_csv_error(report_dict, error_string):
+    report_dict["error"] = error_string
+    print(error_string)
 
 def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
     """Function to handle CSV bulk import."""
@@ -74,29 +79,39 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
 
     client = __get_asnake_client()
 
+    bulk_import_report = []
+
     for f in glob.iglob(f'{csv_directory}*.csv'):
         print(f'Processing file {f}...')
+        file_import_report = {}
+        file_import_report["identifier"] = Path(f).stem
+        file_import_report["type"] = load_type
+        file_import_report["only_validate"] = only_validate
 
         ead_id = get_ead_from_csv(f)
+        file_import_report["ead_id"] = ead_id
         if not ead_id:
-            print(f'No EAD ID found in {f}.')
+            report_csv_error(file_import_report, f'No EAD ID found in {f}.')
             continue
         
         resource_id = get_resource_id_from_ead(ead_id, client)
+        file_import_report["resource_id"] = resource_id
         if not resource_id:
-            print(f'No resource found for EAD ID: {ead_id}.')
+            report_csv_error(file_import_report, f'No resource found for EAD ID: {ead_id}.')
             continue
 
         parts = resource_id.split('/')
         if len(parts) < 4:
-            print(f'Invalid resource ID format: {resource_id}.')
+            report_csv_error(file_import_report, f'Invalid resource ID format: {resource_id}.')
             continue
         repo = parts[2]
         rid = parts[4]
 
         if not repo or not rid:
-            print(f'Invalid repository or resource ID extracted from {resource_id}.')
+            report_csv_error(file_import_report, f'Invalid repository or resource ID extracted from {resource_id}.')
             continue
+        file_import_report["repo_id"] = repo
+        file_import_report["rid"] = rid
 
         file_list = []
         with open(f, 'rb') as file:
@@ -128,8 +143,41 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
                 }),
             }
         ).json()
-        print(json.dumps(import_job, indent=4))
+        file_import_report["results_status"] = import_job.get("status")
+        file_import_report["results_id"] = import_job.get("id")
+        file_import_report["results_uri"] = import_job.get("uri")
+        file_import_report["results_warnings"] = import_job.get("warnings")
 
+        bulk_import_report.append(file_import_report)
+        print(json.dumps(import_job, indent=4))
+    return bulk_import_report
+
+def save_report(path, report_list, validate_only):
+    current_datetime = datetime.now().strftime('%Y-%m-%d-%H%M%S')
+    action = "validate" if validate_only else "import"
+    suffix = current_datetime + "_" + action
+    report_file_name_stem = Path(path).name + "_report_" + suffix
+    report_text_file_name = report_file_name_stem + ".txt"
+    report_save_path = os.path.join(path, "reports")
+
+    if not os.path.exists(report_save_path):
+        os.makedirs(report_save_path)
+
+    txt_report_save_path = os.path.join(report_save_path, report_text_file_name)
+    with open(txt_report_save_path, 'w', encoding='utf-8') as report:
+        print("Import Job Info", file=report)
+        json.dump(report_list, report, indent=4)
+
+    report_csv_file_name = report_file_name_stem + ".csv"
+
+    fieldnames = ['identifier','ead_id','repo_id', 'rid','only_validate','type','resource_id','results_status','results_warnings','results_id','results_uri']
+    
+    csv_report_save_path = os.path.join(report_save_path, report_csv_file_name)
+    with open(csv_report_save_path, "w", newline="", encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in report_list:
+            writer.writerow(row)
 
 def main():
     parser = argparse.ArgumentParser(description='ArchivesSpace CSV Bulk Import Tool')
@@ -148,10 +196,12 @@ def main():
         help='Force only validate',)
     args = parser.parse_args()
 
-    csv_bulk_import(
+    import_report = csv_bulk_import(
         csv_directory=args.dir,
         load_type=args.load_type,
         only_validate='true' if args.only_validate else 'false')
+    
+    save_report(args.dir, import_report, args.only_validate)
 
 
 if __name__ == '__main__':
