@@ -200,7 +200,7 @@ def save_report(path, report_list, validate_only):
 
     report_csv_file_name = report_file_name_stem + ".csv"
 
-    fieldnames = ['identifier','ead_id','repo_id', 'rid','only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri']
+    fieldnames = ['identifier','ead_id','repo_id', 'rid','only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri',"csv_issue_count"]
     
     csv_report_save_path = os.path.join(report_save_path, report_csv_file_name)
     with open(csv_report_save_path, "w", newline="", encoding='utf-8') as csvfile:
@@ -252,8 +252,42 @@ def retrieve_job_output(path, report_list):
             with open(output_file_path, "wb") as f:
                 f.write(response.content)
             print(f"File {output_file_name} downloaded successfully.")
+            issue_count = check_job_output("Info or Error",output_file_path)
+            row["csv_issue_count"] = issue_count
         else:
-            print(f"Failed to retrieve file for identifier {identifier} and job id {job_id}. Status code: {response.status_code}")
+            report_csv_error(row, f"Failed to retrieve file for identifier {identifier} and job id {job_id}. Status code: {response.status_code}")
+
+def check_job_output(column_heading, file_path):
+    """Function to check whether any data was logged in a specified column of a CSV at a given path, and if so how many rows have data in them. Returns -1 for errors."""
+    if not os.path.exists(file_path):
+        print(f"Error: File '{file_path}' does not exist.")
+        return -1
+
+    try:
+        with open(file_path, mode='r', newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+
+            if column_heading not in reader.fieldnames:
+                print(f"Error: Column {column_heading} not found in the CSV file.")
+                return -1
+
+            count = 0
+            for row in reader:
+                value = row.get(column_heading)
+                if value and value.strip():
+                    count += 1
+            return count
+
+    except FileNotFoundError:
+        print(f"Error: File '{file_path}' not found.")
+    except PermissionError:
+        print(f"Error: Permission denied when trying to read '{file_path}'.")
+    except csv.Error as e:
+        print(f"Error reading CSV file at '{file_path}': {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred with '{file_path}': {e}")
+
+    return -1
 
 def main():
     parser = argparse.ArgumentParser(description='ArchivesSpace CSV Bulk Import Tool')
@@ -281,10 +315,10 @@ def main():
         load_type=args.load_type,
         only_validate='true' if args.only_validate else 'false')
     
-    save_report(args.dir, import_report, args.only_validate)
-
     if args.save_output_files:
         retrieve_job_output(args.dir, import_report)
+    
+    save_report(args.dir, import_report, args.only_validate)
 
 if __name__ == '__main__':
     main()
