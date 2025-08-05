@@ -68,6 +68,7 @@ def get_resource_id_from_ead(ead_id, asnake_client):
         return None
 
 def report_csv_error(report_dict, error_string):
+    """Function to print and log error messages (assumes only one error message)."""
     report_dict["error"] = error_string
     print(error_string)
 
@@ -154,6 +155,7 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
     return bulk_import_report
 
 def save_report(path, report_list, validate_only):
+    """Function to create and save reports for tracking bulk imports."""
     current_datetime = datetime.now().strftime('%Y-%m-%d-%H%M%S')
     action = "validate" if validate_only else "import"
     suffix = current_datetime + "_" + action
@@ -181,6 +183,7 @@ def save_report(path, report_list, validate_only):
             writer.writerow(row)
 
 def check_job_status(client, repo_id, job_id):
+    """Function to check whether a job has completed (and thus output files are ready)."""
     while True:
         job_status_response = client.get(f'/repositories/{repo_id}/jobs/{job_id}')
         job_status = job_status_response.json()['status']
@@ -197,6 +200,7 @@ def check_job_status(client, repo_id, job_id):
             time.sleep(pause)
 
 def retrieve_job_output(path, report_list):
+    """Function to retrieve and save last created output files for each job in the bulk import."""
     client = __get_asnake_client()
     for row in report_list:
         repo_id = row["repo_id"]
