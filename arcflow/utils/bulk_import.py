@@ -94,23 +94,27 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
         file_import_report["ead_id"] = ead_id
         if not ead_id:
             report_csv_error(file_import_report, f'No EAD ID found in {f}.')
+            bulk_import_report.append(file_import_report)
             continue
         
         resource_id = get_resource_id_from_ead(ead_id, client)
         file_import_report["resource_id"] = resource_id
         if not resource_id:
             report_csv_error(file_import_report, f'No resource found for EAD ID: {ead_id}.')
+            bulk_import_report.append(file_import_report)
             continue
 
         parts = resource_id.split('/')
         if len(parts) < 4:
             report_csv_error(file_import_report, f'Invalid resource ID format: {resource_id}.')
+            bulk_import_report.append(file_import_report)
             continue
         repo = parts[2]
         rid = parts[4]
 
         if not repo or not rid:
             report_csv_error(file_import_report, f'Invalid repository or resource ID extracted from {resource_id}.')
+            bulk_import_report.append(file_import_report)
             continue
         file_import_report["repo_id"] = repo
         file_import_report["rid"] = rid
@@ -173,7 +177,7 @@ def save_report(path, report_list, validate_only):
 
     report_csv_file_name = report_file_name_stem + ".csv"
 
-    fieldnames = ['identifier','ead_id','repo_id', 'rid','only_validate','type','resource_id','results_status','results_warnings','results_id','results_uri']
+    fieldnames = ['identifier','ead_id','repo_id', 'rid','only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri']
     
     csv_report_save_path = os.path.join(report_save_path, report_csv_file_name)
     with open(csv_report_save_path, "w", newline="", encoding='utf-8') as csvfile:
@@ -203,6 +207,8 @@ def retrieve_job_output(path, report_list):
     """Function to retrieve and save last created output files for each job in the bulk import."""
     client = __get_asnake_client()
     for row in report_list:
+        if "results_id" not in row:
+            continue
         repo_id = row["repo_id"]
         job_id = row["results_id"]
         identifier = row["identifier"]
