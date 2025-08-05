@@ -71,7 +71,6 @@ def check_for_children(repo_id, rid, asnake_client):
     """Function to check how many top-level children a resource already has. Returns integer value for the number of children or -1 if encounters an error."""
     try:
         info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/root").json()
-        print(json.dumps(info, indent=4))
         if 'child_count' not in info:
             return -1
 
@@ -132,15 +131,16 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
         file_import_report["repo_id"] = repo
         file_import_report["rid"] = rid
 
-        child_count = check_for_children(repo, rid, client)
-        if child_count > 0:
-            report_csv_error(file_import_report, f'EAD ID {ead_id} already has {child_count} top-level children in ASpace. Not imported.')
-            bulk_import_report.append(file_import_report)
-            continue
-        elif child_count == -1:
-            report_csv_error(file_import_report, f'Error checking children for EAD ID {ead_id}. Not imported.')
-            bulk_import_report.append(file_import_report)
-            continue
+        if load_type == "ao":
+            child_count = check_for_children(repo, rid, client)
+            if child_count > 0:
+                report_csv_error(file_import_report, f'EAD ID {ead_id} already has {child_count} top-level children in ASpace. Not imported.')
+                bulk_import_report.append(file_import_report)
+                continue
+            elif child_count == -1:
+                report_csv_error(file_import_report, f'Error checking children for EAD ID {ead_id}. Not imported.')
+                bulk_import_report.append(file_import_report)
+                continue
 
         file_list = []
         with open(f, 'rb') as file:
