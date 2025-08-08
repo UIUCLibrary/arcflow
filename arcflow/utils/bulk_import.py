@@ -84,7 +84,7 @@ def report_csv_error(report_dict, error_string):
     report_dict["error"] = error_string
     print(error_string)
 
-def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
+def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false', save_output_files=False):
     """Function to handle CSV bulk import."""
     print("Starting CSV bulk import...")
     if not csv_directory or not os.path.exists(csv_directory):
@@ -179,6 +179,10 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
 
         bulk_import_report.append(file_import_report)
         print(json.dumps(import_job, indent=4))
+    
+    if save_output_files:
+        retrieve_job_output(csv_directory, bulk_import_report, client)
+    
     return bulk_import_report
 
 def save_report(path, report_list, validate_only):
@@ -209,10 +213,10 @@ def save_report(path, report_list, validate_only):
         for row in report_list:
             writer.writerow(row)
 
-def check_job_status(client, repo_id, job_id):
+def check_job_status(asnake_client, repo_id, job_id):
     """Function to check whether a job has completed (and thus output files are ready)."""
     while True:
-        job_status_response = client.get(f'/repositories/{repo_id}/jobs/{job_id}')
+        job_status_response = asnake_client.get(f'/repositories/{repo_id}/jobs/{job_id}')
         job_status = job_status_response.json()['status']
 
         if job_status == 'completed':
@@ -226,21 +230,20 @@ def check_job_status(client, repo_id, job_id):
             print(f"Job {job_id} is still {job_status}. Waiting {pause} seconds...")
             time.sleep(pause)
 
-def retrieve_job_output(path, report_list):
+def retrieve_job_output(path, report_list, asnake_client):
     """Function to retrieve and save last created output files for each job in the bulk import."""
-    client = __get_asnake_client()
     for row in report_list:
         if "results_id" not in row:
             continue
         repo_id = row["repo_id"]
         job_id = row["results_id"]
         identifier = row["identifier"]
-        if not check_job_status(client, repo_id, job_id):
+        if not check_job_status(asnake_client, repo_id, job_id):
             print(f"Error downloading files for job {job_id}")
             continue
-        job_files = client.get(f"/repositories/{repo_id}/jobs/{job_id}/output_files").json()
+        job_files = asnake_client.get(f"/repositories/{repo_id}/jobs/{job_id}/output_files").json()
         output_file_id = max(job_files)
-        response = client.get(f"/repositories/{repo_id}/jobs/{job_id}/output_files/{output_file_id}")
+        response = asnake_client.get(f"/repositories/{repo_id}/jobs/{job_id}/output_files/{output_file_id}")
 
         output_file_name = "_".join([identifier, "job", str(job_id), str(output_file_id)]) +".csv"
         
@@ -313,10 +316,8 @@ def main():
     import_report = csv_bulk_import(
         csv_directory=args.dir,
         load_type=args.load_type,
-        only_validate='true' if args.only_validate else 'false')
-    
-    if args.save_output_files:
-        retrieve_job_output(args.dir, import_report)
+        only_validate='true' if args.only_validate else 'false',
+        save_output_files=args.save_output_files)
     
     save_report(args.dir, import_report, args.only_validate)
 
