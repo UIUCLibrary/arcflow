@@ -4,6 +4,9 @@ import yaml
 import json
 import csv
 import argparse
+import time
+from pathlib import Path
+from datetime import datetime
 from asnake.client import ASnakeClient
 
 
@@ -64,8 +67,24 @@ def get_resource_id_from_ead(ead_id, asnake_client):
         print(f'Error searching for resource ID: {e}')
         return None
 
+def check_for_children(repo_id, rid, asnake_client):
+    """Function to check how many top-level children a resource already has. Returns integer value for the number of children or -1 if encounters an error."""
+    try:
+        info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/root").json()
+        if 'child_count' not in info:
+            return -1
 
-def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
+        return int(info['child_count'])
+    except Exception as e:
+        print(f'Error retrieving child count for resource ID: {e}')
+        return -1
+
+def report_csv_error(report_dict, error_string):
+    """Function to print and log error messages (assumes only one error message)."""
+    report_dict["error"] = error_string
+    print(error_string)
+
+def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false', save_output_files=False):
     """Function to handle CSV bulk import."""
     print("Starting CSV bulk import...")
     if not csv_directory or not os.path.exists(csv_directory):
@@ -74,29 +93,54 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
 
     client = __get_asnake_client()
 
+    bulk_import_report = []
+
     for f in glob.iglob(f'{csv_directory}*.csv'):
         print(f'Processing file {f}...')
+        file_import_report = {}
+        file_import_report["identifier"] = Path(f).stem
+        file_import_report["type"] = load_type
+        file_import_report["only_validate"] = only_validate
 
         ead_id = get_ead_from_csv(f)
+        file_import_report["ead_id"] = ead_id
         if not ead_id:
-            print(f'No EAD ID found in {f}.')
+            report_csv_error(file_import_report, f'No EAD ID found in {f}.')
+            bulk_import_report.append(file_import_report)
             continue
         
         resource_id = get_resource_id_from_ead(ead_id, client)
+        file_import_report["resource_id"] = resource_id
         if not resource_id:
-            print(f'No resource found for EAD ID: {ead_id}.')
+            report_csv_error(file_import_report, f'No resource found for EAD ID: {ead_id}.')
+            bulk_import_report.append(file_import_report)
             continue
 
         parts = resource_id.split('/')
         if len(parts) < 4:
-            print(f'Invalid resource ID format: {resource_id}.')
+            report_csv_error(file_import_report, f'Invalid resource ID format: {resource_id}.')
+            bulk_import_report.append(file_import_report)
             continue
         repo = parts[2]
         rid = parts[4]
 
         if not repo or not rid:
-            print(f'Invalid repository or resource ID extracted from {resource_id}.')
+            report_csv_error(file_import_report, f'Invalid repository or resource ID extracted from {resource_id}.')
+            bulk_import_report.append(file_import_report)
             continue
+        file_import_report["repo_id"] = repo
+        file_import_report["rid"] = rid
+
+        if load_type == "ao":
+            child_count = check_for_children(repo, rid, client)
+            if child_count > 0:
+                report_csv_error(file_import_report, f'EAD ID {ead_id} already has {child_count} top-level children in ASpace. Not imported.')
+                bulk_import_report.append(file_import_report)
+                continue
+            elif child_count == -1:
+                report_csv_error(file_import_report, f'Error checking children for EAD ID {ead_id}. Not imported.')
+                bulk_import_report.append(file_import_report)
+                continue
 
         file_list = []
         with open(f, 'rb') as file:
@@ -128,8 +172,125 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false'):
                 }),
             }
         ).json()
-        print(json.dumps(import_job, indent=4))
+        file_import_report["results_status"] = import_job.get("status")
+        file_import_report["results_id"] = import_job.get("id")
+        file_import_report["results_uri"] = import_job.get("uri")
+        file_import_report["results_warnings"] = import_job.get("warnings")
 
+        bulk_import_report.append(file_import_report)
+        print(json.dumps(import_job, indent=4))
+    
+    if save_output_files:
+        retrieve_job_output(csv_directory, bulk_import_report, client)
+    
+    return bulk_import_report
+
+def save_report(path, report_list, validate_only):
+    """Function to create and save reports for tracking bulk imports."""
+    current_datetime = datetime.now().strftime('%Y-%m-%d-%H%M%S')
+    action = "validate" if validate_only else "import"
+    suffix = current_datetime + "_" + action
+    report_file_name_stem = Path(path).name + "_report_" + suffix
+    report_text_file_name = report_file_name_stem + ".txt"
+    report_save_path = os.path.join(path, "reports")
+
+    if not os.path.exists(report_save_path):
+        os.makedirs(report_save_path)
+
+    txt_report_save_path = os.path.join(report_save_path, report_text_file_name)
+    with open(txt_report_save_path, 'w', encoding='utf-8') as report:
+        print("Import Job Info", file=report)
+        json.dump(report_list, report, indent=4)
+
+    report_csv_file_name = report_file_name_stem + ".csv"
+
+    fieldnames = ['identifier','ead_id','repo_id', 'rid','only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri',"csv_issue_count"]
+    
+    csv_report_save_path = os.path.join(report_save_path, report_csv_file_name)
+    with open(csv_report_save_path, "w", newline="", encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in report_list:
+            writer.writerow(row)
+
+def check_job_status(asnake_client, repo_id, job_id):
+    """Function to check whether a job has completed (and thus output files are ready)."""
+    while True:
+        job_status_response = asnake_client.get(f'/repositories/{repo_id}/jobs/{job_id}')
+        job_status = job_status_response.json()['status']
+
+        if job_status == 'completed':
+            print(f"Job {job_id} completed successfully!")
+            return True
+        elif job_status == 'failed':
+            print(f"Job {job_id} failed.")
+            return False
+        else:
+            pause = 15
+            print(f"Job {job_id} is still {job_status}. Waiting {pause} seconds...")
+            time.sleep(pause)
+
+def retrieve_job_output(path, report_list, asnake_client):
+    """Function to retrieve and save last created output files for each job in the bulk import."""
+    for row in report_list:
+        if "results_id" not in row:
+            continue
+        repo_id = row["repo_id"]
+        job_id = row["results_id"]
+        identifier = row["identifier"]
+        if not check_job_status(asnake_client, repo_id, job_id):
+            print(f"Error downloading files for job {job_id}")
+            continue
+        job_files = asnake_client.get(f"/repositories/{repo_id}/jobs/{job_id}/output_files").json()
+        output_file_id = max(job_files)
+        response = asnake_client.get(f"/repositories/{repo_id}/jobs/{job_id}/output_files/{output_file_id}")
+
+        output_file_name = "_".join([identifier, "job", str(job_id), str(output_file_id)]) +".csv"
+        
+        if response.status_code == 200:
+            output_save_path = os.path.join(path, "output")
+            if not os.path.exists(output_save_path):
+                os.makedirs(output_save_path)
+            output_file_path = os.path.join(output_save_path, output_file_name)
+            with open(output_file_path, "wb") as f:
+                f.write(response.content)
+            print(f"File {output_file_name} downloaded successfully.")
+            issue_count = check_job_output("Info or Error",output_file_path)
+            row["csv_issue_count"] = issue_count
+        else:
+            report_csv_error(row, f"Failed to retrieve file for identifier {identifier} and job id {job_id}. Status code: {response.status_code}")
+
+def check_job_output(column_heading, file_path):
+    """Function to check whether any data was logged in a specified column of a CSV at a given path, and if so how many rows have data in them. Returns -1 for errors."""
+    if not os.path.exists(file_path):
+        print(f"Error: File '{file_path}' does not exist.")
+        return -1
+
+    try:
+        with open(file_path, mode='r', newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+
+            if column_heading not in reader.fieldnames:
+                print(f"Error: Column {column_heading} not found in the CSV file.")
+                return -1
+
+            count = 0
+            for row in reader:
+                value = row.get(column_heading)
+                if value and value.strip():
+                    count += 1
+            return count
+
+    except FileNotFoundError:
+        print(f"Error: File '{file_path}' not found.")
+    except PermissionError:
+        print(f"Error: Permission denied when trying to read '{file_path}'.")
+    except csv.Error as e:
+        print(f"Error reading CSV file at '{file_path}': {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred with '{file_path}': {e}")
+
+    return -1
 
 def main():
     parser = argparse.ArgumentParser(description='ArchivesSpace CSV Bulk Import Tool')
@@ -146,13 +307,19 @@ def main():
         '--only-validate',
         action='store_true',
         help='Force only validate',)
+    parser.add_argument(
+        '--save-output-files',
+        action='store_true',
+        help='Download job output files',)
     args = parser.parse_args()
 
-    csv_bulk_import(
+    import_report = csv_bulk_import(
         csv_directory=args.dir,
         load_type=args.load_type,
-        only_validate='true' if args.only_validate else 'false')
-
+        only_validate='true' if args.only_validate else 'false',
+        save_output_files=args.save_output_files)
+    
+    save_report(args.dir, import_report, args.only_validate)
 
 if __name__ == '__main__':
     main()
