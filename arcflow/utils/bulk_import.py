@@ -92,6 +92,7 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false', s
         exit(0)
 
     client = __get_asnake_client()
+    aspace_instance_url = client.config['baseurl'].split(":")[1].lstrip("/")
 
     bulk_import_report = []
 
@@ -100,6 +101,7 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false', s
         file_import_report = {}
         file_import_report["identifier"] = Path(f).stem
         file_import_report["type"] = load_type
+        file_import_report['aspace_url'] = aspace_instance_url
         file_import_report["only_validate"] = only_validate
 
         ead_id = get_ead_from_csv(f)
@@ -204,7 +206,7 @@ def save_report(path, report_list, validate_only):
 
     report_csv_file_name = report_file_name_stem + ".csv"
 
-    fieldnames = ['identifier','ead_id','repo_id', 'rid','only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri',"csv_issue_count"]
+    fieldnames = ['identifier','ead_id','aspace_url','repo_id', 'rid','only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri',"csv_issue_count"]
     
     csv_report_save_path = os.path.join(report_save_path, report_csv_file_name)
     with open(csv_report_save_path, "w", newline="", encoding='utf-8') as csvfile:
