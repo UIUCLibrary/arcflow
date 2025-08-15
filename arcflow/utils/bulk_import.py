@@ -316,6 +316,9 @@ def main():
         help='Download job output files',)
     args = parser.parse_args()
 
+    if not args.dir.endswith('/'):
+        args.dir += '/'
+
     import_report = csv_bulk_import(
         csv_directory=args.dir,
         load_type=args.load_type,
