@@ -12,6 +12,7 @@ from xml.dom.pulldom import parse, START_ELEMENT
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 
+
 base_dir = os.path.abspath((__file__) + "/../../")
 log_file = os.path.join(base_dir, 'logs/arcflow.log')
 os.makedirs(os.path.dirname(log_file), mode=0o755, exist_ok=True)
@@ -25,15 +26,18 @@ logging.basicConfig(
     ]
 )
 
+
 class ArcFlow:
     """
     ArcFlow is a class that represents a flow of data from ArchivesSpace 
     to ArcLight.
     """
 
-    def __init__(self, arclight_dir, solr_url, force_update=False):
+
+    def __init__(self, arclight_dir, aspace_dir, solr_url, force_update=False):
         self.solr_url = solr_url
         self.arclight_dir = arclight_dir
+        self.aspace_dir = aspace_dir
         self.force_update = force_update
 
         self.log = logging.getLogger('arcflow')
@@ -79,6 +83,7 @@ class ArcFlow:
             self.log.error(f'Error authorizing ASnakeClient: {e}')
             exit(0)
 
+
     def is_running(self):
         """
         Check if the ArcFlow process is already running.
@@ -93,12 +98,14 @@ class ArcFlow:
                 pass
         return False
 
+
     def create_pid_file(self):
         """
         Create a PID file to indicate that the ArcFlow process is running.
         """
         with open(self.pid_file_path, 'w') as file:
             file.write(str(self.pid))
+
 
     def update_repositories(self):
         """
@@ -186,17 +193,19 @@ class ArcFlow:
         else:
             self.log.info(f'File {repos_file_path} is up to date.')
 
+
     def update_eads(self):
         """
         Update EADs in ArcLight with the latest data from resources in 
         ArchivesSpace.
         """
-        eads_dir = f'{self.arclight_dir}/public/eads'
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        pdf_dir = f'{self.arclight_dir}/public/pdf'
 
         modified_since = int(self.last_updated.timestamp())
         if self.force_update or modified_since <= 0:
             modified_since = 0
-            # delete all EAD files and EADs in ArcLight Solr
+            # delete all EADs and related files in ArcLight Solr
             try:
                 response = requests.post(
                     f'{self.solr_url}/update?commit=true',
@@ -204,26 +213,27 @@ class ArcFlow:
                 )
                 if response.status_code == 200:
                     self.log.info('Deleted all EADs from ArcLight Solr.')
-                    # delete ead directory after suscessful deletion from solr
-                    try:
-                        shutil.rmtree(eads_dir)
-                        self.log.info(f'Deleted EADs directory {eads_dir}.')
-                    except Exception as e:
-                        self.log.error(f'Error deleting EADs directory "{eads_dir}": {e}')
+                    # delete related directories after suscessful
+                    # deletion from solr
+                    for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
+                        try:
+                            shutil.rmtree(dir_path)
+                            self.log.info(f'Deleted {dir_name} directory {dir_path}.')
+                        except Exception as e:
+                            self.log.error(f'Error deleting {dir_name} directory "{dir_path}": {e}')
                 else:
                     self.log.error(f'Failed to delete all EADs from Arclight Solr. Status code: {response.status_code}')
             except requests.exceptions.RequestException as e:
                 self.log.error(f'Error deleting all EADs from ArcLight Solr: {e}')
 
+        # create directories if don't exist
+        for dir_path in (xml_dir, pdf_dir):
+            os.makedirs(dir_path, exist_ok=True)
+
         # process resources that have been modified in ArchivesSpace since last update
         self.log.info('Fetching resources from ArchivesSpace...')
         repos = self.client.get('repositories').json()
         for repo in repos:
-            eads_repo_dir = f'{eads_dir}/{repo["slug"]}'
-            #create folder if doesn't exist
-            if not os.path.exists(eads_repo_dir):
-                os.makedirs(eads_repo_dir)
-
             resources = self.client.get(f'{repo["uri"]}/resources',
                 params={
                     'all_ids': True,
@@ -231,19 +241,21 @@ class ArcFlow:
                 }
             ).json()
             for resource_id in resources:
+                if resource_id>5:
+                    exit(0)
+
                 resource = self.client.get(
                     f'{repo["uri"]}/resources/{resource_id}').json()
-                ead_file_path = f'{eads_repo_dir}/{resource_id}.xml'
+
+                xml_file_path = f'{xml_dir}/{resource["ead_id"]}.xml' 
+                pdf_file_path = f'{pdf_dir}/{resource["ead_id"]}.pdf'
+
                 # replace dots with dashes in EAD ID to avoid issues with Solr
                 ead_id = resource['ead_id'].replace('.', '-')
                 self.log.info(f'  Processing resource with ID {resource_id} ("{ead_id}")...')
 
-                # TODO: make sure the EAD ID wasn't updated, otherwise
-                # we need to delete the previous EAD in ArcLight Solr
-                # so it doesn't become orphaned
-
                 if resource['publish'] and not resource['suppressed']:
-                    ead = self.client.get(
+                    xml = self.client.get(
                         f'{repo["uri"]}/resource_descriptions/{resource_id}.xml',
                         params={
                             'include_unpublished': 'false',
@@ -253,16 +265,29 @@ class ArcFlow:
                             'ead3': 'false',
                         })
 
-                    self.save_ead(
-                        ead_file_path,
-                        ead_id,
-                        ead.content,
-                        repo['slug'],
-                        indent=4)
-                else:
-                    self.delete_ead(ead_file_path, ead_id, indent=4)
+                    pdf = self.get_pdf(repo['uri'], resource_id, indent=4)
 
-        # processing deleted resources is not be needed when 
+                    # if the EAD ID was updated in ArchivesSpace,
+                    # delete the previous EAD in ArcLight Solr
+                    prev_ead_id = self.get_ead_from_symlink(
+                        f'{xml_dir}/{resource_id}.xml')
+                    if (prev_ead_id is not None 
+                            and prev_ead_id != resource['ead_id']):
+                        self.delete_ead(
+                            resource_id, 
+                            prev_ead_id.replace('.', '-'),  # dashes in Solr
+                            f'{xml_dir}/{prev_ead_id}.xml', # dots in filenames
+                            f'{pdf_dir}/{prev_ead_id}.pdf', 
+                            indent=4)
+
+                    self.save_ead(repo['slug'], resource_id, ead_id, 
+                        xml_file_path, xml.content, pdf_file_path, 
+                        pdf.content, indent=4)
+                else:
+                    self.delete_ead(resource_id, ead_id, xml_file_path, 
+                        pdf_file_path, indent=4)
+
+        # processing deleted resources is not needed when 
         # force-update is set or modified_since is set to 0
         if self.force_update or modified_since <= 0:
             self.log.info('Skipping deleted resources processing.')
@@ -283,33 +308,33 @@ class ArcFlow:
                 match = re.match(pattern, record)
                 if match:
                     resource_id = match.group('resource_id')
-                    repo_id = match.group('repo_id')
                     self.log.info(f'  Processing deleted resource with ID {resource_id}...')
-                    repo = self.client.get(
-                        f'/repositories/{repo_id}'
-                    ).json()
-                    ead_file_path = f'{eads_dir}/{repo["slug"]}/{resource_id}.xml'
 
-                    ead_id = self.get_ead_id_from_file(ead_file_path)
-
-                    if ead_id is None:
-                        self.log.error(f'    File {ead_file_path} was not found or does not contain an "eadid" tag. Unable to delete the associated EAD from Arclight Solr.')
+                    symlink_path = f'{xml_dir}/{resource_id}.xml'
+                    ead_id = self.get_ead_from_symlink(symlink_path)
+                    if ead_id:
+                        self.delete_ead(
+                            resource_id, 
+                            ead_id.replace('.', '-'),  # dashes in Solr
+                            f'{xml_dir}/{ead_id}.xml', # dots in filenames
+                            f'{pdf_dir}/{ead_id}.pdf', 
+                            indent=4)
                     else:
-                        # replace dots with dashes in EAD ID to avoid issues with Solr
-                        self.delete_ead(ead_file_path, ead_id.replace('.', '-'), indent=4)
+                        self.log.error(f'{" "*4}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
 
             if deleted_records['last_page'] == page:
                 break
             page += 1
 
-    def get_ead_id_from_file(self, ead_file_path):
+
+    def get_ead_id_from_file(self, xml_file_path):
         """
-        Get the EAD ID from the EAD file.
+        Get the EAD ID from the XML file.
         """
         ead_id = None
-        # parse the EAD file to get the ead_id
-        if os.path.isfile(ead_file_path):
-            ead = parse(ead_file_path)
+        # parse the file to get the ead_id
+        if os.path.isfile(xml_file_path):
+            ead = parse(xml_file_path)
             for event, node in ead:
                 if event == START_ELEMENT and node.tagName == 'eadid':
                     ead.expandNode(node)
@@ -318,20 +343,97 @@ class ArcFlow:
 
         return ead_id
 
-    def save_ead(self, ead_file_path, ead_id, ead_content, repo_id, indent=0):
+
+    def get_ead_from_symlink(self, symlink_path):
+        """
+        Get the EAD ID from the symlink file.
+        """
+        ead_id = None
+        if os.path.isfile(symlink_path):
+            real_path = os.path.realpath(symlink_path)
+            ead_id = os.path.splitext(os.path.basename(real_path))[0]
+
+        return ead_id
+
+
+    def get_pdf(self, repo_uri, resource_id, indent=0):
         indent = ' ' * indent
-        #save ead to file
+        aspace_jobs_dir = f'{self.aspace_dir}/data/shared/job_files'
+        job_type = 'print_to_pdf_job'
+
+        job = self.client.post(
+            f'{repo_uri}/jobs',
+            json={
+                'job': {
+                    'source': f'{repo_uri}/resources/{resource_id}',
+                    'jsonmodel_type': job_type,
+                    'job_type': job_type,
+                    'include_unpublished': False,
+                }
+            }
+        ).json()
+
+        while True:
+            job_status = self.client.get(
+                f'{repo_uri}/jobs/{job["id"]}').json()['status']
+
+            if job_status == 'completed':
+                file_id = self.client.get(
+                    f'{repo_uri}/jobs/{job["id"]}/output_files').json()[0]
+
+                pdf = self.client.get(
+                    f'{repo_uri}/jobs/{job["id"]}/output_files/{file_id}')
+
+                # delete to avoid accumulation of jobs in ArchivesSpace
+                response = self.client.delete(f'{repo_uri}/jobs/{job["id"]}')
+                if response.status_code == 200:
+                    job_dir = f'{aspace_jobs_dir}/{job_type}_{job["id"]}'
+                    # delete physical job directory
+                    try:
+                        shutil.rmtree(job_dir)
+                    except Exception as e:
+                        self.log.error(f'{indent}Error deleting ArchivesSpace directory "{job_dir}": {e}')
+                else:
+                    self.log.error(f'{indent}Failed to delete ArchivesSpace {job_type}_{job["id"]}. Status code: {response.status_code}')
+
+                return pdf
+            elif job_status in ('canceled', 'failed'):
+                self.log.error(f'{indent}ArchivesSpace {job_type}_{job["id"]} {job_status}.')
+                return None
+
+            self.log.info(f'{indent}Waiting for ArchivesSpace {job_type}_{job["id"]} to complete... (current status: {job_status})')
+            time.sleep(5)
+
+        return None
+
+
+    def save_ead(self, repo_id, resource_id, ead_id, 
+            xml_file_path, xml_content, pdf_file_path, pdf_content, indent=0):
+        indent = ' ' * indent
+        # save related files
+        for file_path, content, label in [
+            (xml_file_path, xml_content, 'XML'),
+            (pdf_file_path, pdf_content, 'PDF')
+        ]:
+            try:
+                with open(file_path, 'wb') as file:
+                    file.write(content)
+                    self.log.info(f'{indent}Saved {label} file {file_path}.')
+            except Exception as e:
+                self.log.error(f'{indent}Error writing to {label} file {file_path}: {e}')
+
+        # create symlink resource_ID -> EAD_ID file
+        symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
         try:
-            with open(ead_file_path, 'wb') as file:
-                file.write(ead_content)
-                self.log.info(f'{indent}Saved file {ead_file_path}.')
-        except Exception as e:
-            self.log.error(f'{indent}Error writing to file {ead_file_path}: {e}')
+            os.symlink(os.path.basename(xml_file_path), symlink_path)
+            self.log.info(f'{indent}Created symlink {symlink_path} -> {os.path.basename(xml_file_path)}.')
+        except FileExistsError as e:
+            self.log.info(f'{indent}{e}')
 
         # add to solr after successful save
         try:
             result = subprocess.run(
-                f'FILE={ead_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id} bundle exec rails arclight:index',
+                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id} bundle exec rails arclight:index',
                 shell=True,
                 cwd=self.arclight_dir,
                 stderr=subprocess.PIPE,)
@@ -341,7 +443,9 @@ class ArcFlow:
         except subprocess.CalledProcessError as e:
             self.log.error(f'{indent}Error updating EAD "{ead_id}" in ArcLight Solr: {e}')
 
-    def delete_ead(self, ead_file_path, ead_id, indent=0):
+
+    def delete_ead(self, resource_id, ead_id, 
+            xml_file_path, pdf_file_path, indent=0):
         indent = ' ' * indent
         # delete from solr
         try:
@@ -351,12 +455,21 @@ class ArcFlow:
             )
             if response.status_code == 200:
                 self.log.info(f'{indent}Deleted EAD "{ead_id}" from ArcLight Solr.')
-                # delete ead file after suscessful deletion from solr
+                # delete related files after suscessful deletion from solr
+                for file_path in (xml_file_path, pdf_file_path):
+                    try:
+                        os.remove(file_path)
+                        self.log.info(f'{indent}Deleted file {file_path}.')
+                    except FileNotFoundError:
+                        self.log.error(f'{indent}File {file_path} not found.')
+
+                # delete symlink if exists
+                symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
                 try:
-                    os.remove(ead_file_path)
-                    self.log.info(f'{indent}Deleted file {ead_file_path}.')
+                    os.remove(symlink_path)
+                    self.log.info(f'{indent}Deleted symlink {symlink_path}.')
                 except FileNotFoundError:
-                    self.log.error(f'{indent}File {ead_file_path} not found.')
+                    self.log.info(f'{indent}Symlink {symlink_path} not found.')
             else:
                 self.log.error(f'{indent}Failed to delete EAD "{ead_id}" from Arclight Solr. Status code: {response.status_code}')
         except requests.exceptions.RequestException as e:
@@ -393,6 +506,10 @@ def main():
         required=True,
         help='Path to ArcLight installation directory',)
     parser.add_argument(
+        '--aspace-dir',
+        required=True,
+        help='Path to ArchivesSpace installation directory',)
+    parser.add_argument(
         '--force-update',
         action='store_true',
         help='Force update of data',)
@@ -404,6 +521,7 @@ def main():
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
+        aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
         force_update=args.force_update)
     arcflow.run()
