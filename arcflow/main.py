@@ -241,9 +241,6 @@ class ArcFlow:
                 }
             ).json()
             for resource_id in resources:
-                if resource_id>5:
-                    exit(0)
-
                 resource = self.client.get(
                     f'{repo["uri"]}/resources/{resource_id}').json()
 
