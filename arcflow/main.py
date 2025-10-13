@@ -277,9 +277,14 @@ class ArcFlow:
                             f'{pdf_dir}/{prev_ead_id}.pdf', 
                             indent=4)
 
+                    if hasattr(pdf, 'content'):
+                        pdf_content = pdf.content
+                    else:
+                        pdf_content = b''   # empty PDF file
+
                     self.save_ead(repo['slug'], resource_id, ead_id, 
-                        xml_file_path, xml.content, pdf_file_path, 
-                        pdf.content, indent=4)
+                            xml_file_path, xml.content, pdf_file_path, 
+                            pdf_content, indent=4)
                 else:
                     self.delete_ead(resource_id, ead_id, xml_file_path, 
                         pdf_file_path, indent=4)
@@ -374,12 +379,16 @@ class ArcFlow:
             job_status = self.client.get(
                 f'{repo_uri}/jobs/{job["id"]}').json()['status']
 
-            if job_status == 'completed':
-                file_id = self.client.get(
-                    f'{repo_uri}/jobs/{job["id"]}/output_files').json()[0]
+            if job_status in ('completed', 'canceled', 'failed'):
+                if job_status == 'completed':
+                    file_id = self.client.get(
+                        f'{repo_uri}/jobs/{job["id"]}/output_files').json()[0]
 
-                pdf = self.client.get(
-                    f'{repo_uri}/jobs/{job["id"]}/output_files/{file_id}')
+                    pdf = self.client.get(
+                        f'{repo_uri}/jobs/{job["id"]}/output_files/{file_id}')
+                elif job_status in ('canceled', 'failed'):
+                    self.log.error(f'{indent}ArchivesSpace {job_type}_{job["id"]} {job_status}.')
+                    pdf = None
 
                 # delete to avoid accumulation of jobs in ArchivesSpace
                 response = self.client.delete(f'{repo_uri}/jobs/{job["id"]}')
@@ -394,9 +403,6 @@ class ArcFlow:
                     self.log.error(f'{indent}Failed to delete ArchivesSpace {job_type}_{job["id"]}. Status code: {response.status_code}')
 
                 return pdf
-            elif job_status in ('canceled', 'failed'):
-                self.log.error(f'{indent}ArchivesSpace {job_type}_{job["id"]} {job_status}.')
-                return None
 
             self.log.info(f'{indent}Waiting for ArchivesSpace {job_type}_{job["id"]} to complete... (current status: {job_status})')
             time.sleep(5)
