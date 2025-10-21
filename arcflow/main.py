@@ -34,11 +34,12 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, force_update=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, force_update=False, traject_task=''):
         self.solr_url = solr_url
         self.arclight_dir = arclight_dir
         self.aspace_dir = aspace_dir
         self.force_update = force_update
+        self.traject_task = traject_task
 
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
@@ -436,7 +437,7 @@ class ArcFlow:
         # add to solr after successful save
         try:
             result = subprocess.run(
-                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id} bundle exec rails arclight:index',
+                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  EXTRA_CONFIG ={self.traject_task} bundle exec rake arcuit:index',
                 shell=True,
                 cwd=self.arclight_dir,
                 stderr=subprocess.PIPE,)
@@ -520,13 +521,20 @@ def main():
         '--solr-url',
         required=True,
         help='URL of the Solr core',)
+    parser.add_argument(
+        '--traject-task',
+        required=False,
+        help='Path to a traject task file',
+    )
     args = parser.parse_args()
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
-        force_update=args.force_update)
+        force_update=args.force_update,
+        traject_task=args.traject_task
+    )
     arcflow.run()
 
 if __name__ == '__main__':
