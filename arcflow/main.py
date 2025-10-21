@@ -34,12 +34,13 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, force_update=False, traject_task=''):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, data_path='../arclight/data',force_update=False, traject_task=''):
         self.solr_url = solr_url
         self.arclight_dir = arclight_dir
         self.aspace_dir = aspace_dir
         self.force_update = force_update
         self.traject_task = traject_task
+        self.data_path = data_path
 
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
@@ -437,7 +438,7 @@ class ArcFlow:
         # add to solr after successful save
         try:
             result = subprocess.run(
-                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  EXTRA_CONFIG ={self.traject_task} bundle exec rake arcuit:index',
+                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  TRAJECT_SETTINGS="aspace_classification_map_path={self.data_path}/aspace_classification_map.json" EXTRA_CONFIG={self.traject_task} bundle exec rake arcuit:index',
                 shell=True,
                 cwd=self.arclight_dir,
                 stderr=subprocess.PIPE,)
@@ -526,6 +527,11 @@ def main():
         required=False,
         help='Path to a traject task file',
     )
+    parser.add_argument(
+        '--data-path',
+        required=False,
+        help='Path to a data directory for data used by traject tasks',
+    )
     args = parser.parse_args()
 
     arcflow = ArcFlow(
@@ -533,7 +539,8 @@ def main():
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
         force_update=args.force_update,
-        traject_task=args.traject_task
+        traject_task=args.traject_task,
+        data_path=args.data_path
     )
     arcflow.run()
 
