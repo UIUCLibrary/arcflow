@@ -1,4 +1,3 @@
-
 import os
 import json
 import yaml
@@ -29,6 +28,10 @@ def __get_asnake_client():
 client = __get_asnake_client()
 
 def labels_from_path(path_from_root):
+    """
+    Extracts human-readable labels for record groups and subgroups from a classification path.
+    Returns a tuple: (record group label, subgroup label)
+    """
     rg = sg = None
     if path_from_root:
         rg_node = path_from_root[0]
@@ -46,55 +49,43 @@ def labels_from_path(path_from_root):
                 sg = f"{code} — {sg_t}"
     return rg, sg
 
-def parse_eadid(eadid):
-    parts = eadid.split('.')
-    repo_code = parts[0] if len(parts) > 0 else None
-    rg_id = parts[1] if len(parts) > 1 else None
-    sg_id = parts[2] if len(parts) > 2 else None
-    col_id = parts[3] if len(parts) > 3 else None
-    return repo_code, rg_id, sg_id, col_id
-
-def extract_labels(resource):
+def extract_rg_sg(resource):
+    """
+    Given a resource record, extracts its EAD ID and associated record group and subgroup labels.
+    Returns a tuple: (eadid, list of record groups, list of subgroups)
+    """
     eadid = resource.get('ead_id', '').strip()
-    title = resource.get('title', '').strip()
     if not eadid:
-        return None, None, None, None
+        return None, [], []
 
-    rg_label = sg_label = None
+    rgs, sgs = [], []
     for link in resource.get('classifications', []):
         term = link.get('_resolved', {})
         path = term.get('path_from_root', [])
         rg, sg = labels_from_path(path)
         if rg:
-            rg_label = rg
+            rgs.append(rg)
         if sg:
-            sg_label = sg
+            sgs.append(sg)
 
-    return eadid, rg_label, sg_label, title
+    return eadid, list(set(rgs)), list(set(sgs))
 
 def process_repository(repo_id, map_data):
+    """
+    Processes all resources in a given repository and updates the flat map_data structure.
+    """
     ids = client.get(f"/repositories/{repo_id}/resources?all_ids=true").json()
     for i, id in enumerate(ids):
         res = client.get(f"/repositories/{repo_id}/resources/{id}?resolve[]=classifications&resolve[]=classification_terms").json()
-        eadid, rg_label, sg_label, title = extract_labels(res)
+        eadid, rgs, sgs = extract_rg_sg(res)
         if not eadid:
             continue
+        map_data[eadid] = {
+            'record_groups': rgs,
+            'subgroups': sgs
+        }
 
-        repo_code, rg_id, sg_id, col_id = parse_eadid(eadid)
-        if not repo_code or not rg_id:
-            continue
-
-        repo = map_data.setdefault(repo_code, {})
-        rg = repo.setdefault(rg_id, {'label': rg_label, 'subgroups': {}})
-
-        if sg_id:
-            sg = rg['subgroups'].setdefault(sg_id, {'label': sg_label, 'collections': {}})
-            if col_id:
-                sg['collections'][eadid] = {'ead_id': eadid, 'title': title}
-        else:
-            rg.setdefault('collections', {})[eadid] = {'ead_id': eadid, 'title': title}
-
-        print(f"[{i+1}/{len(ids)}] {eadid} -> RG={rg_label} SG={sg_label}")
+        print(f"[{i+1}/{len(ids)}] {eadid} -> RG={rgs} SG={sgs}")
 
 def main():
     parser = argparse.ArgumentParser(description="Harvest classification data from ArchivesSpace.")
@@ -120,7 +111,7 @@ def main():
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, 'w') as f:
         json.dump(map_data, f, indent=2)
-    print(f"Wrote {out_path} ({len(map_data)} repositories)")
+    print(f"Wrote {out_path} ({len(map_data)} records)")
 
 if __name__ == "__main__":
     main()
