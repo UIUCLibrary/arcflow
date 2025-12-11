@@ -12,7 +12,6 @@ from xml.dom.pulldom import parse, START_ELEMENT
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
-#from multiprocessing.pool import Pool
 from utils.stage_classifications import extract_labels
 
 
@@ -84,9 +83,6 @@ class ArcFlow:
                 password=config['password'],
                 baseurl=config['baseurl'],
             )
-            # s = self.client.session
-            # a = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
-            # s.mount('http://', a)
             self.client.authorize()
         except Exception as e:
             self.log.error(f'Error authorizing ASnakeClient: {e}')
@@ -229,13 +225,15 @@ class ArcFlow:
                     'ead3': 'false',
                 })
 
-            # add record group and subgroup labels to EAD
+            # add record group and subgroup labels to EAD inside <archdesc level="collection">
             if xml.content:
                 rg_label, sg_label = extract_labels(resource)[1:3]
                 if rg_label:
                     xml_content = xml.content.decode('utf-8')
-                    insert_pos = xml_content.find('</eadheader>')
+                    insert_pos = xml_content.find('<archdesc level="collection">')
                     if insert_pos != -1:
+                        # Find the position after the opening tag
+                        insert_pos = xml_content.find('</did>', insert_pos)
                         extra_xml = f'<recordgroup>{rg_label}</recordgroup>'
                         if sg_label:
                             extra_xml += f'<subgroup>{sg_label}</subgroup>'
@@ -345,7 +343,7 @@ class ArcFlow:
                 return True
 
             self.log.info(f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} to complete... (current status: {job_status})')
-            time.sleep(10)
+            time.sleep(5)
 
 
     def update_eads(self):
