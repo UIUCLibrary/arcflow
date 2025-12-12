@@ -388,23 +388,42 @@ class ArcFlow:
 
         indent_size = 2
         with Pool(processes=10) as pool:
+            # Tasks for processing repositories
             results_1 = [pool.apply_async(
                 self.task_repository, 
                 args=(repo, xml_dir, modified_since, indent_size)) 
                 for repo in repos]
+            # Collect outputs from repository tasks
             outputs_1 = [r.get() for r in results_1]
 
+            # Tasks for processing resources
             results_2 = [pool.apply_async(
                 self.task_resource, 
                 args=(repo, resource_id, xml_dir, pdf_dir, indent_size)) 
                 for repo, resources in outputs_1 for resource_id in resources]
+            # Collect outputs from resource tasks
             outputs_2 = [r.get() for r in results_2]
 
+            # Tasks for indexing pending resources
+            results_3 = [pool.apply_async(
+                self.index,
+                args=(self.get_repo_id(repo), f'{xml_dir}/{self.get_repo_id(repo)}_*_pending.xml', indent_size))
+                for repo in repos]
+
+            # Tasks for processing PDFs
+            results_4 = [pool.apply_async(
+                self.task_pdf,
+                args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
+                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
+
+            # Wait for indexing tasks to complete
+            for r in results_3:
+                r.get()
+            
+            # Remove pending symlinks after indexing
             for repo in repos:
                 repo_id = self.get_repo_id(repo)
                 xml_file_path = f'{xml_dir}/{repo_id}_*_pending.xml'
-                self.index(repo_id, xml_file_path, indent_size=indent_size)
-                # remove pending symlinks after indexing
                 try:
                     result = subprocess.run(
                         f'rm {xml_file_path}',
@@ -416,12 +435,9 @@ class ArcFlow:
                         self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
                 except Exception as e:
                     self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
-
-            results_3 = [pool.apply_async(
-                self.task_pdf,
-                args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
-                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
-            for r in results_3:
+            
+            # Wait for PDF tasks to complete
+            for r in results_4:
                 r.get()
 
         # processing deleted resources is not needed when 
