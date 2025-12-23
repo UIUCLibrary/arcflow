@@ -244,9 +244,9 @@ class ArcFlow:
                         # Add record group and subgroup labels
                         rg_label, sg_label = extract_labels(resource)[1:3]
                         if rg_label:
-                            extra_xml += f'\n<recordgroup>{rg_label}</recordgroup>'
+                            extra_xml += f'\n<recordgroup>{xml_escape(rg_label)}</recordgroup>'
                             if sg_label:
-                                extra_xml += f'\n<subgroup>{sg_label}</subgroup>'
+                                extra_xml += f'\n<subgroup>{xml_escape(sg_label)}</subgroup>'
                         
                         # Add biographical/historical notes from creator agents
                         bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
