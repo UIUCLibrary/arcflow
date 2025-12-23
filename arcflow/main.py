@@ -205,7 +205,7 @@ class ArcFlow:
         resource = self.client.get(
             f'{repo["uri"]}/resources/{resource_id}',
             params={
-                'resolve': ['classifications', 'classification_terms'],
+                'resolve': ['classifications', 'classification_terms', 'linked_agents'],
             }).json()
 
         xml_file_path = f'{xml_dir}/{resource["ead_id"]}.xml'
@@ -227,22 +227,43 @@ class ArcFlow:
 
             # add record group and subgroup labels to EAD inside <archdesc level="collection">
             if xml.content:
-                rg_label, sg_label = extract_labels(resource)[1:3]
-                if rg_label:
-                    xml_content = xml.content.decode('utf-8')
-                    insert_pos = xml_content.find('<archdesc level="collection">')
+                xml_content = xml.content.decode('utf-8')
+                insert_pos = xml_content.find('<archdesc level="collection">')
+                
+                if insert_pos != -1:
+                    # Find the position after the closing </did> tag
+                    insert_pos = xml_content.find('</did>', insert_pos)
+                    
                     if insert_pos != -1:
-                        # Find the position after the opening tag
-                        insert_pos = xml_content.find('</did>', insert_pos)
-                        extra_xml = f'<recordgroup>{rg_label}</recordgroup>'
-                        if sg_label:
-                            extra_xml += f'<subgroup>{sg_label}</subgroup>'
-                        xml_content = (xml_content[:insert_pos] + 
-                            extra_xml + 
-                            xml_content[insert_pos:])
-                    xml_content = xml_content.encode('utf-8')
-                else:
-                    xml_content = xml.content
+                        # Move to after the </did> tag
+                        insert_pos += len('</did>')
+                        extra_xml = ''
+                        
+                        # Add record group and subgroup labels
+                        rg_label, sg_label = extract_labels(resource)[1:3]
+                        if rg_label:
+                            extra_xml += f'<recordgroup>{rg_label}</recordgroup>'
+                            if sg_label:
+                                extra_xml += f'<subgroup>{sg_label}</subgroup>'
+                        
+                        # Add biographical/historical notes from creator agents
+                        bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
+                        if bioghist_content:
+                            # Escape XML special characters
+                            bioghist_content = (bioghist_content
+                                .replace('&', '&amp;')
+                                .replace('<', '&lt;')
+                                .replace('>', '&gt;'))
+                            extra_xml += f'<bioghist><p>{bioghist_content}</p></bioghist>'
+                        
+                        if extra_xml:
+                            xml_content = (xml_content[:insert_pos] + 
+                                extra_xml + 
+                                xml_content[insert_pos:])
+                
+                xml_content = xml_content.encode('utf-8')
+            else:
+                xml_content = xml.content
 
             # next level of indentation for nested operations
             indent_size += 2
@@ -497,6 +518,43 @@ class ArcFlow:
                 self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
         except subprocess.CalledProcessError as e:
             self.log.error(f'{indent}Error indexing pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
+
+
+    def get_creator_bioghist(self, resource, indent_size=0):
+        """
+        Get biographical/historical notes from creator agents linked to the resource.
+        Returns the concatenated notes as a string, or None if no creator agents have notes.
+        """
+        indent = ' ' * indent_size
+        bioghist_notes = []
+        
+        if 'linked_agents' not in resource:
+            return None
+        
+        for linked_agent in resource['linked_agents']:
+            # Only process agents with 'creator' role
+            if linked_agent.get('role') == 'creator':
+                agent_ref = linked_agent.get('ref')
+                if agent_ref:
+                    try:
+                        agent = self.client.get(agent_ref).json()
+                        
+                        # Check for notes in the agent record
+                        if 'notes' in agent:
+                            for note in agent['notes']:
+                                # Look for biographical/historical notes
+                                if note.get('jsonmodel_type') == 'note_bioghist':
+                                    # Extract note content from subnotes
+                                    if 'subnotes' in note:
+                                        for subnote in note['subnotes']:
+                                            if 'content' in subnote:
+                                                bioghist_notes.append(subnote['content'])
+                    except Exception as e:
+                        self.log.error(f'{indent}Error fetching agent {agent_ref}: {e}')
+        
+        if bioghist_notes:
+            return '\n'.join(bioghist_notes)
+        return None
 
 
     def get_repo_id(self, repo):
