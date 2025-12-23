@@ -11,6 +11,7 @@ When making changes to this repository, use **granular, single-purpose commits**
 - **One commit per logical change** - Each commit should do one thing and do it well
 - **Separate refactoring from features** - Don't mix code restructuring with new functionality
 - **Clear, descriptive messages** - Explain what the commit does and why
+- **Include imports with usage** - Add necessary imports in the same commit where they're used, not as separate commits
 
 ### Examples
 
@@ -18,16 +19,25 @@ Good commit sequence:
 ```
 1. Refactor XML injection logic for extensibility
 2. Add linked_agents to resolve parameter
-3. Import xml.sax.saxutils.escape for proper XML escaping
-4. Add get_creator_bioghist method
-5. Integrate bioghist into XML injection
-6. Update comment to reflect new behavior
+3. Add get_creator_bioghist method
+   (includes import of xml.sax.saxutils.escape used in the method)
+4. Integrate bioghist into XML injection
+5. Update comment to reflect new behavior
 ```
 
-Bad commit (too dense):
+Bad commit sequences:
+
+Too dense:
 ```
 1. Add creator biographical information to EAD XML exports
    (combines refactoring, new imports, new methods, and integration)
+```
+
+Too granular:
+```
+1. Import xml.sax.saxutils.escape
+2. Add get_creator_bioghist method that uses xml.sax.saxutils.escape
+   (import should have been included in this commit)
 ```
 
 ### Commit Message Format
