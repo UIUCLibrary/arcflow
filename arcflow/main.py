@@ -511,6 +511,45 @@ class ArcFlow:
             self.log.error(f'{indent}Error indexing pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
 
 
+    def get_creator_bioghist(self, resource, indent_size=0):
+        """
+        Get biographical/historical notes from creator agents linked to the resource.
+        Returns the notes formatted as XML paragraphs, or None if no creator agents have notes.
+        """
+        indent = ' ' * indent_size
+        bioghist_paragraphs = []
+        
+        if 'linked_agents' not in resource:
+            return None
+        
+        for linked_agent in resource['linked_agents']:
+            # Only process agents with 'creator' role
+            if linked_agent.get('role') == 'creator':
+                agent_ref = linked_agent.get('ref')
+                if agent_ref:
+                    try:
+                        agent = self.client.get(agent_ref).json()
+                        
+                        # Check for notes in the agent record
+                        if 'notes' in agent:
+                            for note in agent['notes']:
+                                # Look for biographical/historical notes
+                                if note.get('jsonmodel_type') == 'note_bioghist':
+                                    # Extract note content from subnotes
+                                    if 'subnotes' in note:
+                                        for subnote in note['subnotes']:
+                                            if 'content' in subnote:
+                                                # Escape XML special characters and wrap in paragraph tags
+                                                escaped_content = xml_escape(subnote['content'])
+                                                bioghist_paragraphs.append(f'<p>{escaped_content}</p>')
+                    except Exception as e:
+                        self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
+        
+        if bioghist_paragraphs:
+            return ''.join(bioghist_paragraphs)
+        return None
+
+
     def get_repo_id(self, repo):
         """
         Get the repository ID from the repository URI.
