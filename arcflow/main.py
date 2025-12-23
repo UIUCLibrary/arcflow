@@ -205,7 +205,7 @@ class ArcFlow:
         resource = self.client.get(
             f'{repo["uri"]}/resources/{resource_id}',
             params={
-                'resolve': ['classifications', 'classification_terms'],
+                'resolve': ['classifications', 'classification_terms', 'linked_agents'],
             }).json()
 
         xml_file_path = f'{xml_dir}/{resource["ead_id"]}.xml'
