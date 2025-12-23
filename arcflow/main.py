@@ -226,7 +226,8 @@ class ArcFlow:
                     'ead3': 'false',
                 })
 
-            # add record group and subgroup labels to EAD inside <archdesc level="collection">
+            # add custom XML elements to EAD inside <archdesc level="collection">
+            # (record group/subgroup labels and biographical/historical notes)
             if xml.content:
                 xml_content = xml.content.decode('utf-8')
                 insert_pos = xml_content.find('<archdesc level="collection">')
