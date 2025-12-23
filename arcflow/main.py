@@ -9,7 +9,6 @@ import subprocess
 import re
 import logging
 from xml.dom.pulldom import parse, START_ELEMENT
-from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
@@ -250,7 +249,12 @@ class ArcFlow:
                         # Add biographical/historical notes from creator agents
                         bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
                         if bioghist_content:
-                            extra_xml += f'<bioghist>{bioghist_content}</bioghist>'
+                            # Escape XML special characters
+                            bioghist_content = (bioghist_content
+                                .replace('&', '&amp;')
+                                .replace('<', '&lt;')
+                                .replace('>', '&gt;'))
+                            extra_xml += f'<bioghist><p>{bioghist_content}</p></bioghist>'
                         
                         if extra_xml:
                             xml_content = (xml_content[:insert_pos] + 
@@ -519,10 +523,10 @@ class ArcFlow:
     def get_creator_bioghist(self, resource, indent_size=0):
         """
         Get biographical/historical notes from creator agents linked to the resource.
-        Returns the notes formatted as XML paragraphs, or None if no creator agents have notes.
+        Returns the concatenated notes as a string, or None if no creator agents have notes.
         """
         indent = ' ' * indent_size
-        bioghist_paragraphs = []
+        bioghist_notes = []
         
         if 'linked_agents' not in resource:
             return None
@@ -544,14 +548,12 @@ class ArcFlow:
                                     if 'subnotes' in note:
                                         for subnote in note['subnotes']:
                                             if 'content' in subnote:
-                                                # Escape XML special characters and wrap in paragraph tags
-                                                escaped_content = xml_escape(subnote['content'])
-                                                bioghist_paragraphs.append(f'<p>{escaped_content}</p>')
+                                                bioghist_notes.append(subnote['content'])
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching agent {agent_ref}: {e}')
         
-        if bioghist_paragraphs:
-            return ''.join(bioghist_paragraphs)
+        if bioghist_notes:
+            return '\n'.join(bioghist_notes)
         return None
 
 
