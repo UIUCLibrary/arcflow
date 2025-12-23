@@ -9,6 +9,7 @@ import subprocess
 import re
 import logging
 from xml.dom.pulldom import parse, START_ELEMENT
+from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
