@@ -227,22 +227,33 @@ class ArcFlow:
 
             # add record group and subgroup labels to EAD inside <archdesc level="collection">
             if xml.content:
-                rg_label, sg_label = extract_labels(resource)[1:3]
-                if rg_label:
-                    xml_content = xml.content.decode('utf-8')
-                    insert_pos = xml_content.find('<archdesc level="collection">')
+                xml_content = xml.content.decode('utf-8')
+                insert_pos = xml_content.find('<archdesc level="collection">')
+                
+                if insert_pos != -1:
+                    # Find the position after the closing </did> tag
+                    insert_pos = xml_content.find('</did>', insert_pos)
+                    
                     if insert_pos != -1:
-                        # Find the position after the opening tag
-                        insert_pos = xml_content.find('</did>', insert_pos)
-                        extra_xml = f'<recordgroup>{rg_label}</recordgroup>'
-                        if sg_label:
-                            extra_xml += f'<subgroup>{sg_label}</subgroup>'
-                        xml_content = (xml_content[:insert_pos] + 
-                            extra_xml + 
-                            xml_content[insert_pos:])
-                    xml_content = xml_content.encode('utf-8')
-                else:
-                    xml_content = xml.content
+                        # Move to after the </did> tag
+                        insert_pos += len('</did>')
+                        extra_xml = ''
+                        
+                        # Add record group and subgroup labels
+                        rg_label, sg_label = extract_labels(resource)[1:3]
+                        if rg_label:
+                            extra_xml += f'<recordgroup>{rg_label}</recordgroup>'
+                            if sg_label:
+                                extra_xml += f'<subgroup>{sg_label}</subgroup>'
+                        
+                        if extra_xml:
+                            xml_content = (xml_content[:insert_pos] + 
+                                extra_xml + 
+                                xml_content[insert_pos:])
+                
+                xml_content = xml_content.encode('utf-8')
+            else:
+                xml_content = xml.content
 
             # next level of indentation for nested operations
             indent_size += 2
