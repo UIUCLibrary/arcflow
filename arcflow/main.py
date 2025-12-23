@@ -548,7 +548,7 @@ class ArcFlow:
                                                 escaped_content = xml_escape(subnote['content'])
                                                 bioghist_paragraphs.append(f'<p>{escaped_content}</p>')
                     except Exception as e:
-                        self.log.error(f'{indent}Error fetching agent {agent_ref}: {e}')
+                        self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
         
         if bioghist_paragraphs:
             return ''.join(bioghist_paragraphs)
