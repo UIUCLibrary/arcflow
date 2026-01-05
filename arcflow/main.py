@@ -545,9 +545,8 @@ class ArcFlow:
                                     if 'subnotes' in note:
                                         for subnote in note['subnotes']:
                                             if 'content' in subnote:
-                                                # Escape XML special characters and wrap in paragraph tags
-                                                escaped_content = xml_escape(subnote['content'])
-                                                bioghist_paragraphs.append(f'<p>{escaped_content}</p>')
+                                                # Content already contains valid EAD XML markup - pass through as-is
+                                                bioghist_paragraphs.append(f'<p>{subnote["content"]}</p>')
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
         
