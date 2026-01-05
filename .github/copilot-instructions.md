@@ -55,6 +55,39 @@ Too granular:
 
 ---
 
+## XML Content Handling in EAD Pipeline
+
+When injecting content into EAD XML files, distinguish between plain text and structured XML:
+
+### Escaping Strategy
+
+- **Plain text labels** (recordgroup, subgroup): Use `xml_escape()` to escape special characters (`&`, `<`, `>`)
+  - These are simple strings that may contain characters that break XML syntax
+  - Example: `xml_escape(rg_label)` → converts `"Group & Co"` to `"Group &amp; Co"`
+
+- **Structured EAD XML content** (bioghist, scopecontent): Do NOT escape
+  - Content from ArchivesSpace already contains valid EAD XML markup (`<emph>`, `<title>`, etc.)
+  - These are legitimate XML nodes that must be preserved
+  - Escaping would convert them to literal text: `<emph>` → `&lt;emph&gt;`
+  - Example: Pass through as-is: `f'<p>{subnote["content"]}</p>'`
+
+### Why This Matters
+
+The Traject indexing pipeline and ArcLight display rely on proper XML structure:
+1. Traject's `.to_html` converts XML nodes to HTML
+2. ArcLight's `render_html_tags` processes the HTML for display
+3. If XML nodes are escaped (treated as text), they can't be processed and appear as raw markup
+
+### Pattern for Future Fields
+
+When adding new EAD fields to the pipeline:
+1. Determine if content is plain text or structured XML
+2. Apply escaping only to plain text
+3. Pass structured XML through unchanged
+4. Document the decision in code comments
+
+---
+
 ## Adding More Instructions
 
 To add additional instructions to this file:
