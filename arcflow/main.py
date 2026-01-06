@@ -48,6 +48,7 @@ class ArcFlow:
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
+        self.arcflow_file_path = os.path.join(base_dir, '.arcflow.yml')
         if self.is_running():
             self.log.info(f'ArcFlow process previously started still running. Exiting (PID: {self.pid}).')
             exit(0)
@@ -56,7 +57,7 @@ class ArcFlow:
 
         self.start_time = int(time.time())
         try:
-            with open('.arcflow.yml', 'r') as file:
+            with open(self.arcflow_file_path, 'r') as file:
                 config = yaml.safe_load(file)
             try:
                 self.last_updated = datetime.strptime(
@@ -71,7 +72,7 @@ class ArcFlow:
             else:
                 self.last_updated = datetime.fromtimestamp(0, timezone.utc)
         try:
-            with open('.archivessnake.yml', 'r') as file:
+            with open(os.path.join(base_dir, '.archivessnake.yml'), 'r') as file:
                 config = yaml.safe_load(file)
         except FileNotFoundError:
             self.log.error('File .archivessnake.yml not found. Create the file.')
@@ -613,7 +614,7 @@ class ArcFlow:
         Save the last updated timestamp to the .arcflow.yml file.
         """
         try:
-            with open('.arcflow.yml', 'w') as file:
+            with open(self.arcflow_file_path, 'w') as file:
                 yaml.dump({
                     'last_updated': datetime.fromtimestamp(self.start_time, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S%z')
                 }, file)
