@@ -423,12 +423,6 @@ class ArcFlow:
                 args=(repo_id, f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
                 for repo_id, batch_num in batches]
 
-            # Tasks for processing PDFs
-            results_4 = [pool.apply_async(
-                self.task_pdf,
-                args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
-                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
-
             # Wait for indexing tasks to complete
             for r in results_3:
                 r.get()
@@ -447,6 +441,12 @@ class ArcFlow:
                         self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
                 except Exception as e:
                     self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
+
+            # Tasks for processing PDFs
+            results_4 = [pool.apply_async(
+                self.task_pdf,
+                args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
+                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
 
             # Wait for PDF tasks to complete
             for r in results_4:
