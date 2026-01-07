@@ -8,6 +8,7 @@ import requests
 import subprocess
 import re
 import logging
+import math
 from xml.dom.pulldom import parse, START_ELEMENT
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
@@ -38,13 +39,12 @@ class ArcFlow:
 
     def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False):
         self.solr_url = solr_url
+        self.batch_size = 1000
         self.traject_extra_config = f'-c {traject_extra_config}' if traject_extra_config.strip() else ''
         self.arclight_dir = arclight_dir
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
-
         self.force_update = force_update
-
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -268,10 +268,13 @@ class ArcFlow:
                 os.path.basename(xml_file_path),
                 f'{os.path.dirname(xml_file_path)}/{resource_id}.xml',
                 indent_size=indent_size)
-            # files pending to index are named repoID_resourceID_pending.xml 
+
+            repo_id = self.get_repo_id(repo)
+            self.resources_counter[repo_id] += 1
+            # files pending to index are named repoID_resourceID_batch_batchNUM.xml 
             self.create_symlink(
                 os.path.basename(xml_file_path),
-                f'{os.path.dirname(xml_file_path)}/{self.get_repo_id(repo)}_{resource_id}_pending.xml',
+                f'{os.path.dirname(xml_file_path)}/{repo_id}_{resource_id}_batch_{math.ceil(self.resources_counter[repo_id]/self.batch_size)}.xml',
                 indent_size=indent_size)
         else:
             self.delete_ead(
@@ -293,8 +296,9 @@ class ArcFlow:
                 'modified_since': modified_since,
             }
         ).json()
-        num_resources = len(resources)
-        self.log.info(f'{indent}Found {len(resources)} resources in repository ID {self.get_repo_id(repo)}.')
+        repo_id = self.get_repo_id(repo)
+        self.resources_counter[repo_id] = 0
+        self.log.info(f'{indent}Found {len(resources)} resources in repository ID {repo_id}.')
 
         # return the repository and its resources for next async processing step
         return (repo, resources)
@@ -388,6 +392,7 @@ class ArcFlow:
         repos = self.client.get('repositories').json()
 
         indent_size = 2
+        self.resources_counter = {}
         with Pool(processes=10) as pool:
             # Tasks for processing repositories
             results_1 = [pool.apply_async(
@@ -405,11 +410,18 @@ class ArcFlow:
             # Collect outputs from resource tasks
             outputs_2 = [r.get() for r in results_2]
 
+            # Create batches for indexing pending resources
+            batches = []
+            for repo, resources in self.resources_counter.items():
+                num_batches = math.ceil(resources/self.batch_size)
+                for batch_num in range(1, num_batches + 1):
+                    batches.append((repo, batch_num))
+
             # Tasks for indexing pending resources
             results_3 = [pool.apply_async(
                 self.index,
-                args=(self.get_repo_id(repo), f'{xml_dir}/{self.get_repo_id(repo)}_*_pending.xml', indent_size))
-                for repo in repos]
+                args=(repo_id, f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
+                for repo_id, batch_num in batches]
 
             # Tasks for processing PDFs
             results_4 = [pool.apply_async(
@@ -420,11 +432,10 @@ class ArcFlow:
             # Wait for indexing tasks to complete
             for r in results_3:
                 r.get()
-            
+
             # Remove pending symlinks after indexing
-            for repo in repos:
-                repo_id = self.get_repo_id(repo)
-                xml_file_path = f'{xml_dir}/{repo_id}_*_pending.xml'
+            for repo_id, batch_num in batches:
+                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
                 try:
                     result = subprocess.run(
                         f'rm {xml_file_path}',
@@ -436,7 +447,7 @@ class ArcFlow:
                         self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
                 except Exception as e:
                     self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
-            
+
             # Wait for PDF tasks to complete
             for r in results_4:
                 r.get()
@@ -486,7 +497,7 @@ class ArcFlow:
         self.log.info(f'{indent}Indexing pending resources in repository ID {repo_id} to ArcLight Solr...')
         try:
             result = subprocess.run(
-                f'REPOSITORY_ID={repo_id} bundle exec traject -u {self.solr_url} -s processing_thread_pool=8 -s solr_writer.thread_pool=8 -s solr_writer.batch_size=1000 -s solr_writer.commit_on_close=true -i xml -c $(bundle show arclight)/lib/arclight/traject/ead2_config.rb {self.traject_extra_config} {xml_file_path}',
+                f'REPOSITORY_ID={repo_id} bundle exec traject -u {self.solr_url} -s processing_thread_pool=8 -s solr_writer.thread_pool=8 -s solr_writer.batch_size={self.batch_size} -s solr_writer.commit_on_close=true -i xml -c $(bundle show arclight)/lib/arclight/traject/ead2_config.rb {self.traject_extra_config} {xml_file_path}',
 #                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  TRAJECT_SETTINGS="processing_thread_pool=8 solr_writer.thread_pool=8 solr_writer.batch_size=1000 solr_writer.commit_on_close=false" bundle exec rake arcuit:index',
                 shell=True,
                 cwd=self.arclight_dir,
