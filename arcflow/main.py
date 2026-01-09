@@ -564,8 +564,8 @@ class ArcFlow:
                                     
                                     # Create nested bioghist element if we have paragraphs
                                     if paragraphs:
-                                        paragraphs_xml = ''.join(paragraphs)
-                                        bioghist_el = f'<bioghist id="aspace_{agent_id}"><head>{xml_escape(agent_name)}</head>{paragraphs_xml}</bioghist>'
+                                        paragraphs_xml = '\n'.join(paragraphs)
+                                        bioghist_el = f'<bioghist id="aspace_{agent_id}"><head>{xml_escape(agent_name)}</head>\n{paragraphs_xml}\n</bioghist>'
                                         bioghist_elements.append(bioghist_el)
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
