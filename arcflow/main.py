@@ -251,7 +251,7 @@ class ArcFlow:
                         # Add biographical/historical notes from creator agents
                         bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
                         if bioghist_content:
-                            extra_xml += f'\n<bioghist>{bioghist_content}</bioghist>'
+                            extra_xml += f'\n{bioghist_content}'
                         
                         if extra_xml:
                             xml_content = (xml_content[:insert_pos] + 
@@ -520,14 +520,16 @@ class ArcFlow:
     def get_creator_bioghist(self, resource, indent_size=0):
         """
         Get biographical/historical notes from creator agents linked to the resource.
-        Returns the notes formatted as XML paragraphs, or None if no creator agents have notes.
+        Returns nested bioghist elements for each creator, or None if no creator agents have notes.
+        Each bioghist element includes the creator name in a head element and an id attribute.
         """
         indent = ' ' * indent_size
-        bioghist_paragraphs = []
+        bioghist_elements = []
         
         if 'linked_agents' not in resource:
             return None
         
+        # Process linked_agents in order to maintain consistency with origination order
         for linked_agent in resource['linked_agents']:
             # Only process agents with 'creator' role
             if linked_agent.get('role') == 'creator':
@@ -536,22 +538,40 @@ class ArcFlow:
                     try:
                         agent = self.client.get(agent_ref).json()
                         
+                        # Extract agent ID from URI for id attribute
+                        agent_id = agent_ref.split('/')[-1] if agent_ref else ''
+                        
+                        # Get agent name for head element
+                        agent_name = agent.get('title') or agent.get('display_name', {}).get('sort_name', 'Unknown')
+                        
                         # Check for notes in the agent record
                         if 'notes' in agent:
                             for note in agent['notes']:
                                 # Look for biographical/historical notes
                                 if note.get('jsonmodel_type') == 'note_bioghist':
                                     # Extract note content from subnotes
+                                    paragraphs = []
                                     if 'subnotes' in note:
                                         for subnote in note['subnotes']:
                                             if 'content' in subnote:
-                                                # Content already contains valid EAD XML markup - pass through as-is
-                                                bioghist_paragraphs.append(f'<p>{subnote["content"]}</p>')
+                                                # Split content on single newlines to create paragraphs
+                                                content = subnote['content']
+                                                # Split on newline and filter out empty strings
+                                                lines = [line.strip() for line in content.split('\n') if line.strip()]
+                                                # Wrap each line in <p> tags
+                                                for line in lines:
+                                                    paragraphs.append(f'<p>{line}</p>')
+                                    
+                                    # Create nested bioghist element if we have paragraphs
+                                    if paragraphs:
+                                        paragraphs_xml = ''.join(paragraphs)
+                                        bioghist_el = f'<bioghist id="aspace_{agent_id}"><head>{xml_escape(agent_name)}</head>{paragraphs_xml}</bioghist>'
+                                        bioghist_elements.append(bioghist_el)
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
         
-        if bioghist_paragraphs:
-            return ''.join(bioghist_paragraphs)
+        if bioghist_elements:
+            return ''.join(bioghist_elements)
         return None
 
 
