@@ -59,5 +59,8 @@ MANIFEST
 # ArcFlow configuration file
 .arcflow.yml
 
+# Omeka configuration file
+.omeka.yml
+
 # PID files
 *.pid
