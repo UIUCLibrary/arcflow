@@ -12,6 +12,7 @@ import math
 from xml.dom.pulldom import parse, START_ELEMENT
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
+from utils.omeka import OmekaClient
 from multiprocessing.pool import ThreadPool as Pool
 from utils.stage_classifications import extract_labels
 
@@ -71,13 +72,13 @@ class ArcFlow:
                 exit(0)
             else:
                 self.last_updated = datetime.fromtimestamp(0, timezone.utc)
+
         try:
             with open(os.path.join(base_dir, '.archivessnake.yml'), 'r') as file:
                 config = yaml.safe_load(file)
         except FileNotFoundError:
             self.log.error('File .archivessnake.yml not found. Create the file.')
             exit(0)
-
         try:
             self.client = ASnakeClient(
                 username=config['username'],
@@ -87,6 +88,23 @@ class ArcFlow:
             self.client.authorize()
         except Exception as e:
             self.log.error(f'Error authorizing ASnakeClient: {e}')
+            exit(0)
+
+        try:
+            with open(os.path.join(base_dir, '.omeka.yml'), 'r') as file:
+                config = yaml.safe_load(file)
+        except FileNotFoundError:
+            self.log.error('File .omeka.yml not found. Create the file.')
+            exit(0)
+        try:
+            self.omeka = OmekaClient(
+                base_url = config['baseurl'],
+                key_identity = config['key_identity'],
+                key_credential = config['key_credential'],
+                logger = self.log
+            )
+        except Exception as e:
+            self.log.error(f'Error initializing OmekaClient: {e}')
             exit(0)
 
 
@@ -200,6 +218,59 @@ class ArcFlow:
             self.log.info(f'File {repos_file_path} is up to date.')
 
 
+    def task_digital_object(self, repo, digital_object_id, indent_size=0):
+        ##for testing
+        if digital_object_id != 3572:
+        # if digital_object_id not in (739, 2962, 444):
+            return
+
+        indent = ' ' * indent_size
+        digital_object = self.client.get(
+            f'{repo["uri"]}/digital_objects/{digital_object_id}',
+            params={
+                'resolve': [
+                    'linked_agents',
+                    'subjects',
+                    'collection',
+                    'repository',
+                    'tree',
+                ],
+            }).json()
+
+        self.log.info(f'{indent}Processing digital object ID {digital_object_id}...')
+        if not digital_object['suppressed']:
+#            print(json.dumps(digital_object, indent=2))
+            omeka_uri = self.omeka.upsert(digital_object)
+
+            has_omeka_uri = False
+            for file_version in digital_object['file_versions']:
+                if file_version['file_uri'] == omeka_uri:
+                    has_omeka_uri = True
+                    break
+
+            if not has_omeka_uri and omeka_uri:
+                digital_object['file_versions'].append({
+                    'file_uri': omeka_uri,
+                    'publish': digital_object.get('publish', False),
+                    'is_representative': True,
+                    'jsonmodel_type': 'file_version',
+                })
+
+                updated_object = self.client.post(
+                    f'{repo["uri"]}/digital_objects/{digital_object_id}',
+                    json={
+                        **digital_object
+                    }).json()
+
+            self.log.info(f'{indent}Omeka item for digital object ID {digital_object_id}: {omeka_uri}.')
+#            print(json.dumps(updated_object, indent=2))
+        else:
+            self.omeka.delete(digital_object['digital_object_id'])
+
+        # Return any relevant information for further processing
+        return digital_object
+
+
     def task_resource(self, repo, resource_id, xml_dir, pdf_dir, indent_size=0):
         indent = ' ' * indent_size
         pdf_job = (None, None, None)
@@ -288,20 +359,21 @@ class ArcFlow:
         return pdf_job
 
 
-    def task_repository(self, repo, xml_dir, modified_since, indent_size=0):
+    def task_repository(self, repo, modified_since, object_type='resources', indent_size=0):
         indent = ' ' * indent_size
-        resources = self.client.get(f'{repo["uri"]}/resources',
+        object_list = self.client.get(f'{repo["uri"]}/{object_type}',
             params={
                 'all_ids': True,
                 'modified_since': modified_since,
             }
         ).json()
         repo_id = self.get_repo_id(repo)
-        self.resources_counter[repo_id] = 0
-        self.log.info(f'{indent}Found {len(resources)} resources in repository ID {repo_id}.')
+        if object_type == 'resources':
+            self.resources_counter[repo_id] = 0
+        self.log.info(f'{indent}Found {len(object_list)} {object_type} in repository ID {repo_id}.')
 
         # return the repository and its resources for next async processing step
-        return (repo, resources)
+        return (repo, object_list)
 
 
     def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir, indent_size=0):
@@ -394,63 +466,82 @@ class ArcFlow:
         indent_size = 2
         self.resources_counter = {}
         with Pool(processes=10) as pool:
-            # Tasks for processing repositories
-            results_1 = [pool.apply_async(
+
+## for digital objects  
+            # Tasks for processing digital objects
+            results_10 = [pool.apply_async(
                 self.task_repository, 
-                args=(repo, xml_dir, modified_since, indent_size)) 
-                for repo in repos]
+                args=(repo, modified_since, 'digital_objects', indent_size)) 
+                for repo in repos if self.get_repo_id(repo) == '7']
             # Collect outputs from repository tasks
-            outputs_1 = [r.get() for r in results_1]
+            outputs_10 = [r.get() for r in results_10]
 
-            # Tasks for processing resources
-            results_2 = [pool.apply_async(
-                self.task_resource, 
-                args=(repo, resource_id, xml_dir, pdf_dir, indent_size)) 
-                for repo, resources in outputs_1 for resource_id in resources]
-            # Collect outputs from resource tasks
-            outputs_2 = [r.get() for r in results_2]
+            # # Tasks for processing digital objects
+            results_20 = [pool.apply_async(
+                self.task_digital_object, 
+                args=(repo, digital_object_id, indent_size)) 
+                for repo, digital_objects in outputs_10 for digital_object_id in digital_objects]
+            # Collect outputs from digital_object tasks
+            outputs_20 = [r.get() for r in results_20]
+##
 
-            # Create batches for indexing pending resources
-            batches = []
-            for repo, resources in self.resources_counter.items():
-                num_batches = math.ceil(resources/self.batch_size)
-                for batch_num in range(1, num_batches + 1):
-                    batches.append((repo, batch_num))
+            # # Tasks for processing repositories
+            # results_1 = [pool.apply_async(
+            #     self.task_repository, 
+            #     args=(repo, modified_since, 'resources', indent_size)) 
+            #     for repo in repos]
+            # # Collect outputs from repository tasks
+            # outputs_1 = [r.get() for r in results_1]
 
-            # Tasks for indexing pending resources
-            results_3 = [pool.apply_async(
-                self.index,
-                args=(repo_id, f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
-                for repo_id, batch_num in batches]
+            # # Tasks for processing resources
+            # results_2 = [pool.apply_async(
+            #     self.task_resource, 
+            #     args=(repo, resource_id, xml_dir, pdf_dir, indent_size)) 
+            #     for repo, resources in outputs_1 for resource_id in resources]
+            # # Collect outputs from resource tasks
+            # outputs_2 = [r.get() for r in results_2]
 
-            # Wait for indexing tasks to complete
-            for r in results_3:
-                r.get()
+            # # Create batches for indexing pending resources
+            # batches = []
+            # for repo, resources in self.resources_counter.items():
+            #     num_batches = math.ceil(resources/self.batch_size)
+            #     for batch_num in range(1, num_batches + 1):
+            #         batches.append((repo, batch_num))
 
-            # Remove pending symlinks after indexing
-            for repo_id, batch_num in batches:
-                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
-                try:
-                    result = subprocess.run(
-                        f'rm {xml_file_path}',
-                        shell=True,
-                        cwd=self.arclight_dir,
-                        stderr=subprocess.PIPE,)
-                    self.log.error(f'{" " * indent_size}{result.stderr.decode("utf-8")}')
-                    if result.returncode != 0:
-                        self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
-                except Exception as e:
-                    self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
+            # # Tasks for indexing pending resources
+            # results_3 = [pool.apply_async(
+            #     self.index,
+            #     args=(repo_id, f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
+            #     for repo_id, batch_num in batches]
 
-            # Tasks for processing PDFs
-            results_4 = [pool.apply_async(
-                self.task_pdf,
-                args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
-                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
+            # # Wait for indexing tasks to complete
+            # for r in results_3:
+            #     r.get()
 
-            # Wait for PDF tasks to complete
-            for r in results_4:
-                r.get()
+            # # Remove pending symlinks after indexing
+            # for repo_id, batch_num in batches:
+            #     xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+            #     try:
+            #         result = subprocess.run(
+            #             f'rm {xml_file_path}',
+            #             shell=True,
+            #             cwd=self.arclight_dir,
+            #             stderr=subprocess.PIPE,)
+            #         self.log.error(f'{" " * indent_size}{result.stderr.decode("utf-8")}')
+            #         if result.returncode != 0:
+            #             self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
+            #     except Exception as e:
+            #         self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
+
+            # # Tasks for processing PDFs
+            # results_4 = [pool.apply_async(
+            #     self.task_pdf,
+            #     args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
+            #     for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
+
+            # # Wait for PDF tasks to complete
+            # for r in results_4:
+            #     r.get()
 
         # processing deleted resources is not needed when 
         # force-update is set or modified_since is set to 0
