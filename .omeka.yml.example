@@ -1,0 +1,30 @@
+# Omeka connection settings
+omeka:
+  baseurl: "omeka_baseurl"
+  key_identity: "omeka_api_key_identity"
+  key_credential: "omeka_api_key_credential"
+
+# Archon integration mode:
+# 0: Disabled
+# 1: Always enabled
+# 2: Enabled for a single run (will reset to disabled after one execution)
+use_archon: 0
+
+# Archon database connection settings organized by ArchivesSpace repository ID
+# Use comma-separated IDs if multiple repositories share the same Archon database
+archon:
+  'repo_id_1, repo_id_2':
+    host: "database_host"
+    port: 1433
+    database: "archon_database_name_1"
+    username: "user_1"
+    password: "password_1"
+  'repo_id_3':
+    host: "database_host"
+    port: 1433
+    database: "archon_database_name_2"
+    username: "user_2"
+    password: "password_2"
+
+# media temporary directory
+tmp_dir: "/tmp/"
