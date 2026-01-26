@@ -556,8 +556,16 @@ class ArcFlow:
                                             if 'content' in subnote:
                                                 # Split content on single newlines to create paragraphs
                                                 content = subnote['content']
-                                                # Split on newline and filter out empty strings
-                                                lines = [line.strip() for line in content.split('\n') if line.strip()]
+                                                # Handle content as either string or list
+                                                if isinstance(content, str):
+                                                    # Split on newline and filter out empty strings
+                                                    lines = [line.strip() for line in content.split('\n') if line.strip()]
+                                                elif isinstance(content, list):
+                                                    # Content is already a list - use as is
+                                                    lines = [str(item).strip() for item in content if str(item).strip()]
+                                                else:
+                                                    # Skip unknown content types
+                                                    continue
                                                 # Wrap each line in <p> tags
                                                 for line in lines:
                                                     paragraphs.append(f'<p>{line}</p>')
