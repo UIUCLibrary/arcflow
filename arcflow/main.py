@@ -234,11 +234,11 @@ class ArcFlow:
                 
                 if insert_pos != -1:
                     # Find the position after the closing </did> tag
-                    insert_pos = xml_content.find('</did>', insert_pos)
+                    did_end_pos = xml_content.find('</did>', insert_pos)
                     
-                    if insert_pos != -1:
+                    if did_end_pos != -1:
                         # Move to after the </did> tag
-                        insert_pos += len('</did>')
+                        did_end_pos += len('</did>')
                         extra_xml = ''
                         
                         # Add record group and subgroup labels
@@ -248,15 +248,31 @@ class ArcFlow:
                             if sg_label:
                                 extra_xml += f'\n<subgroup>{xml_escape(sg_label)}</subgroup>'
                         
-                        # Add biographical/historical notes from creator agents
+                        # Handle biographical/historical notes from creator agents
                         bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
                         if bioghist_content:
-                            extra_xml += f'\n{bioghist_content}'
+                            # Check if there's already a bioghist element in the EAD
+                            # Search for existing bioghist after </did> but before </archdesc>
+                            archdesc_end = xml_content.find('</archdesc>', did_end_pos)
+                            search_section = xml_content[did_end_pos:archdesc_end] if archdesc_end != -1 else xml_content[did_end_pos:]
+                            
+                            # Look for closing </bioghist> tag to append after it
+                            existing_bioghist_end = search_section.rfind('</bioghist>')
+                            
+                            if existing_bioghist_end != -1:
+                                # Found existing bioghist - append after it
+                                insert_pos = did_end_pos + existing_bioghist_end + len('</bioghist>')
+                                xml_content = (xml_content[:insert_pos] + 
+                                    f'\n{bioghist_content}' + 
+                                    xml_content[insert_pos:])
+                            else:
+                                # No existing bioghist - add with other custom elements
+                                extra_xml += f'\n{bioghist_content}'
                         
                         if extra_xml:
-                            xml_content = (xml_content[:insert_pos] + 
+                            xml_content = (xml_content[:did_end_pos] + 
                                 extra_xml + 
-                                xml_content[insert_pos:])
+                                xml_content[did_end_pos:])
                 
                 xml_content = xml_content.encode('utf-8')
             else:
@@ -549,6 +565,13 @@ class ArcFlow:
                             for note in agent['notes']:
                                 # Look for biographical/historical notes
                                 if note.get('jsonmodel_type') == 'note_bioghist':
+                                    # Get persistent_id for the id attribute
+                                    persistent_id = note.get('persistent_id', '')
+                                    if not persistent_id:
+                                        self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist for agent {agent_ref}')
+                                        # Fall back to agent_id if persistent_id is missing
+                                        persistent_id = agent_id
+                                    
                                     # Extract note content from subnotes
                                     paragraphs = []
                                     if 'subnotes' in note:
@@ -556,7 +579,7 @@ class ArcFlow:
                                             if 'content' in subnote:
                                                 # Split content on single newlines to create paragraphs
                                                 content = subnote['content']
-                                                # Handle content as either string or list
+                                                # Handle content as either string or list with explicit type checking
                                                 if isinstance(content, str):
                                                     # Split on newline and filter out empty strings
                                                     lines = [line.strip() for line in content.split('\n') if line.strip()]
@@ -564,7 +587,8 @@ class ArcFlow:
                                                     # Content is already a list - use as is
                                                     lines = [str(item).strip() for item in content if str(item).strip()]
                                                 else:
-                                                    # Skip unknown content types
+                                                    # Log unexpected content type prominently
+                                                    self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected string or list for subnote content in agent {agent_ref}, got {type(content).__name__}')
                                                     continue
                                                 # Wrap each line in <p> tags
                                                 for line in lines:
@@ -573,7 +597,8 @@ class ArcFlow:
                                     # Create nested bioghist element if we have paragraphs
                                     if paragraphs:
                                         paragraphs_xml = '\n'.join(paragraphs)
-                                        bioghist_el = f'<bioghist id="aspace_{agent_id}"><head>{xml_escape(agent_name)}</head>\n{paragraphs_xml}\n</bioghist>'
+                                        heading = f'Historical Note from {xml_escape(agent_name)} Creator Record'
+                                        bioghist_el = f'<bioghist id="aspace_{persistent_id}"><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
                                         bioghist_elements.append(bioghist_el)
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
