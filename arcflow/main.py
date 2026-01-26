@@ -256,18 +256,19 @@ class ArcFlow:
                             archdesc_end = xml_content.find('</archdesc>', did_end_pos)
                             search_section = xml_content[did_end_pos:archdesc_end] if archdesc_end != -1 else xml_content[did_end_pos:]
                             
-                            # Look for closing </bioghist> tag to append after it
+                            # Look for closing </bioghist> tag
                             existing_bioghist_end = search_section.rfind('</bioghist>')
                             
                             if existing_bioghist_end != -1:
-                                # Found existing bioghist - append after it
-                                insert_pos = did_end_pos + existing_bioghist_end + len('</bioghist>')
+                                # Found existing bioghist - insert agent elements INSIDE it (before closing tag)
+                                insert_pos = did_end_pos + existing_bioghist_end
                                 xml_content = (xml_content[:insert_pos] + 
-                                    f'\n{bioghist_content}' + 
+                                    f'\n{bioghist_content}\n' + 
                                     xml_content[insert_pos:])
                             else:
-                                # No existing bioghist - add with other custom elements
-                                extra_xml += f'\n{bioghist_content}'
+                                # No existing bioghist - wrap agent elements in parent container
+                                wrapped_content = f'<bioghist>\n{bioghist_content}\n</bioghist>'
+                                extra_xml += f'\n{wrapped_content}'
                         
                         if extra_xml:
                             xml_content = (xml_content[:did_end_pos] + 
@@ -569,8 +570,8 @@ class ArcFlow:
                                     persistent_id = note.get('persistent_id', '')
                                     if not persistent_id:
                                         self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist for agent {agent_ref}')
-                                        # Fall back to agent_id if persistent_id is missing
-                                        persistent_id = agent_id
+                                        # Skip creating id attribute if persistent_id is missing
+                                        persistent_id = None
                                     
                                     # Extract note content from subnotes
                                     paragraphs = []
@@ -598,13 +599,20 @@ class ArcFlow:
                                     if paragraphs:
                                         paragraphs_xml = '\n'.join(paragraphs)
                                         heading = f'Historical Note from {xml_escape(agent_name)} Creator Record'
-                                        bioghist_el = f'<bioghist id="aspace_{persistent_id}"><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
+                                        # Only include id attribute if persistent_id is available
+                                        if persistent_id:
+                                            bioghist_el = f'<bioghist id="aspace_{persistent_id}"><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
+                                        else:
+                                            bioghist_el = f'<bioghist><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
                                         bioghist_elements.append(bioghist_el)
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
         
         if bioghist_elements:
-            return ''.join(bioghist_elements)
+            # Return the agent bioghist elements (unwrapped)
+            # The caller will decide whether to wrap them based on whether
+            # an existing bioghist element exists
+            return '\n'.join(bioghist_elements)
         return None
 
 
