@@ -569,8 +569,8 @@ class ArcFlow:
                                     persistent_id = note.get('persistent_id', '')
                                     if not persistent_id:
                                         self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist for agent {agent_ref}')
-                                        # Fall back to agent_id if persistent_id is missing
-                                        persistent_id = agent_id
+                                        # Skip creating id attribute if persistent_id is missing
+                                        persistent_id = None
                                     
                                     # Extract note content from subnotes
                                     paragraphs = []
@@ -598,7 +598,11 @@ class ArcFlow:
                                     if paragraphs:
                                         paragraphs_xml = '\n'.join(paragraphs)
                                         heading = f'Historical Note from {xml_escape(agent_name)} Creator Record'
-                                        bioghist_el = f'<bioghist id="aspace_{persistent_id}"><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
+                                        # Only include id attribute if persistent_id is available
+                                        if persistent_id:
+                                            bioghist_el = f'<bioghist id="aspace_{persistent_id}"><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
+                                        else:
+                                            bioghist_el = f'<bioghist><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
                                         bioghist_elements.append(bioghist_el)
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
