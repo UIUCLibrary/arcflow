@@ -608,7 +608,9 @@ class ArcFlow:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
         
         if bioghist_elements:
-            return ''.join(bioghist_elements)
+            # Wrap all agent bioghist elements in a parent bioghist container
+            wrapped_elements = '\n'.join(bioghist_elements)
+            return f'<bioghist>\n{wrapped_elements}\n</bioghist>'
         return None
 
 
