@@ -256,18 +256,19 @@ class ArcFlow:
                             archdesc_end = xml_content.find('</archdesc>', did_end_pos)
                             search_section = xml_content[did_end_pos:archdesc_end] if archdesc_end != -1 else xml_content[did_end_pos:]
                             
-                            # Look for closing </bioghist> tag to append after it
+                            # Look for closing </bioghist> tag
                             existing_bioghist_end = search_section.rfind('</bioghist>')
                             
                             if existing_bioghist_end != -1:
-                                # Found existing bioghist - append after it
-                                insert_pos = did_end_pos + existing_bioghist_end + len('</bioghist>')
+                                # Found existing bioghist - insert agent elements INSIDE it (before closing tag)
+                                insert_pos = did_end_pos + existing_bioghist_end
                                 xml_content = (xml_content[:insert_pos] + 
-                                    f'\n{bioghist_content}' + 
+                                    f'\n{bioghist_content}\n' + 
                                     xml_content[insert_pos:])
                             else:
-                                # No existing bioghist - add with other custom elements
-                                extra_xml += f'\n{bioghist_content}'
+                                # No existing bioghist - wrap agent elements in parent container
+                                wrapped_content = f'<bioghist>\n{bioghist_content}\n</bioghist>'
+                                extra_xml += f'\n{wrapped_content}'
                         
                         if extra_xml:
                             xml_content = (xml_content[:did_end_pos] + 
@@ -608,9 +609,10 @@ class ArcFlow:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
         
         if bioghist_elements:
-            # Wrap all agent bioghist elements in a parent bioghist container
-            wrapped_elements = '\n'.join(bioghist_elements)
-            return f'<bioghist>\n{wrapped_elements}\n</bioghist>'
+            # Return the agent bioghist elements (unwrapped)
+            # The caller will decide whether to wrap them based on whether
+            # an existing bioghist element exists
+            return '\n'.join(bioghist_elements)
         return None
 
 
