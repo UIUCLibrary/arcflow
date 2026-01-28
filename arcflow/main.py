@@ -10,6 +10,7 @@ import re
 import logging
 import math
 from xml.dom.pulldom import parse, START_ELEMENT
+from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
@@ -206,7 +207,7 @@ class ArcFlow:
         resource = self.client.get(
             f'{repo["uri"]}/resources/{resource_id}',
             params={
-                'resolve': ['classifications', 'classification_terms'],
+                'resolve': ['classifications', 'classification_terms', 'linked_agents'],
             }).json()
 
         xml_file_path = f'{xml_dir}/{resource["ead_id"]}.xml'
@@ -226,24 +227,58 @@ class ArcFlow:
                     'ead3': 'false',
                 })
 
-            # add record group and subgroup labels to EAD inside <archdesc level="collection">
+            # add custom XML elements to EAD inside <archdesc level="collection">
+            # (record group/subgroup labels and biographical/historical notes)
             if xml.content:
-                rg_label, sg_label = extract_labels(resource)[1:3]
-                if rg_label:
-                    xml_content = xml.content.decode('utf-8')
-                    insert_pos = xml_content.find('<archdesc level="collection">')
-                    if insert_pos != -1:
-                        # Find the position after the opening tag
-                        insert_pos = xml_content.find('</did>', insert_pos)
-                        extra_xml = f'<recordgroup>{rg_label}</recordgroup>'
-                        if sg_label:
-                            extra_xml += f'<subgroup>{sg_label}</subgroup>'
-                        xml_content = (xml_content[:insert_pos] + 
-                            extra_xml + 
-                            xml_content[insert_pos:])
-                    xml_content = xml_content.encode('utf-8')
-                else:
-                    xml_content = xml.content
+                xml_content = xml.content.decode('utf-8')
+                insert_pos = xml_content.find('<archdesc level="collection">')
+                
+                if insert_pos != -1:
+                    # Find the position after the closing </did> tag
+                    did_end_pos = xml_content.find('</did>', insert_pos)
+                    
+                    if did_end_pos != -1:
+                        # Move to after the </did> tag
+                        did_end_pos += len('</did>')
+                        extra_xml = ''
+                        
+                        # Add record group and subgroup labels
+                        rg_label, sg_label = extract_labels(resource)[1:3]
+                        if rg_label:
+                            extra_xml += f'\n<recordgroup>{xml_escape(rg_label)}</recordgroup>'
+                            if sg_label:
+                                extra_xml += f'\n<subgroup>{xml_escape(sg_label)}</subgroup>'
+                        
+                        # Handle biographical/historical notes from creator agents
+                        bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
+                        if bioghist_content:
+                            # Check if there's already a bioghist element in the EAD
+                            # Search for existing bioghist after </did> but before </archdesc>
+                            archdesc_end = xml_content.find('</archdesc>', did_end_pos)
+                            search_section = xml_content[did_end_pos:archdesc_end] if archdesc_end != -1 else xml_content[did_end_pos:]
+                            
+                            # Look for closing </bioghist> tag
+                            existing_bioghist_end = search_section.rfind('</bioghist>')
+                            
+                            if existing_bioghist_end != -1:
+                                # Found existing bioghist - insert agent elements INSIDE it (before closing tag)
+                                insert_pos = did_end_pos + existing_bioghist_end
+                                xml_content = (xml_content[:insert_pos] + 
+                                    f'\n{bioghist_content}\n' + 
+                                    xml_content[insert_pos:])
+                            else:
+                                # No existing bioghist - wrap agent elements in parent container
+                                wrapped_content = f'<bioghist>\n{bioghist_content}\n</bioghist>'
+                                extra_xml += f'\n{wrapped_content}'
+                        
+                        if extra_xml:
+                            xml_content = (xml_content[:did_end_pos] + 
+                                extra_xml + 
+                                xml_content[did_end_pos:])
+                
+                xml_content = xml_content.encode('utf-8')
+            else:
+                xml_content = xml.content
 
             # next level of indentation for nested operations
             indent_size += 2
@@ -509,6 +544,85 @@ class ArcFlow:
                 self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
         except subprocess.CalledProcessError as e:
             self.log.error(f'{indent}Error indexing pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
+
+
+    def get_creator_bioghist(self, resource, indent_size=0):
+        """
+        Get biographical/historical notes from creator agents linked to the resource.
+        Returns nested bioghist elements for each creator, or None if no creator agents have notes.
+        Each bioghist element includes the creator name in a head element and an id attribute.
+        """
+        indent = ' ' * indent_size
+        bioghist_elements = []
+        
+        if 'linked_agents' not in resource:
+            return None
+        
+        # Process linked_agents in order to maintain consistency with origination order
+        for linked_agent in resource['linked_agents']:
+            # Only process agents with 'creator' role
+            if linked_agent.get('role') == 'creator':
+                agent_ref = linked_agent.get('ref')
+                if agent_ref:
+                    try:
+                        agent = self.client.get(agent_ref).json()
+                        
+                        # Get agent name for head element
+                        agent_name = agent.get('title') or agent.get('display_name', {}).get('sort_name', 'Unknown')
+                        
+                        # Check for notes in the agent record
+                        if 'notes' in agent:
+                            for note in agent['notes']:
+                                # Look for biographical/historical notes
+                                if note.get('jsonmodel_type') == 'note_bioghist':
+                                    # Get persistent_id for the id attribute
+                                    persistent_id = note.get('persistent_id', '')
+                                    if not persistent_id:
+                                        self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist for agent {agent_ref}')
+                                        # Skip creating id attribute if persistent_id is missing
+                                        persistent_id = None
+                                    
+                                    # Extract note content from subnotes
+                                    paragraphs = []
+                                    if 'subnotes' in note:
+                                        for subnote in note['subnotes']:
+                                            if 'content' in subnote:
+                                                # Split content on single newlines to create paragraphs
+                                                content = subnote['content']
+                                                # Handle content as either string or list with explicit type checking
+                                                if isinstance(content, str):
+                                                    # Split on newline and filter out empty strings
+                                                    lines = [line.strip() for line in content.split('\n') if line.strip()]
+                                                elif isinstance(content, list):
+                                                    # Content is already a list - use as is
+                                                    lines = [str(item).strip() for item in content if str(item).strip()]
+                                                else:
+                                                    # Log unexpected content type prominently
+                                                    self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected string or list for subnote content in agent {agent_ref}, got {type(content).__name__}')
+                                                    continue
+                                                # Wrap each line in <p> tags
+                                                for line in lines:
+                                                    paragraphs.append(f'<p>{line}</p>')
+                                    
+                                    # Create nested bioghist element if we have paragraphs
+                                    if paragraphs:
+                                        paragraphs_xml = '\n'.join(paragraphs)
+                                        heading = f'Historical Note from {xml_escape(agent_name)} Creator Record'
+                                        # Only include id attribute if persistent_id is available
+                                        if persistent_id:
+                                            bioghist_el = f'<bioghist id="aspace_{persistent_id}"><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
+                                        else:
+                                            bioghist_el = f'<bioghist><head>{heading}</head>\n{paragraphs_xml}\n</bioghist>'
+                                        bioghist_elements.append(bioghist_el)
+                    except Exception as e:
+                        self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
+        
+        if bioghist_elements:
+            # Return the agent bioghist elements (unwrapped)
+            # The caller will decide whether to wrap them based on whether
+            # an existing bioghist element exists
+            return '\n'.join(bioghist_elements)
+        return None
 
 
     def get_repo_id(self, repo):
