@@ -555,9 +555,6 @@ class ArcFlow:
                     try:
                         agent = self.client.get(agent_ref).json()
                         
-                        # Extract agent ID from URI for id attribute
-                        agent_id = agent_ref.split('/')[-1] if agent_ref else ''
-                        
                         # Get agent name for head element
                         agent_name = agent.get('title') or agent.get('display_name', {}).get('sort_name', 'Unknown')
                         
