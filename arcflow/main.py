@@ -771,9 +771,10 @@ class ArcFlow:
             
             eac_cpf_xml = response.text
             
-            # Parse the EAC-CPF XML to extract key information
+            # Parse the EAC-CPF XML to validate and inspect its structure
             try:
                 root = ET.fromstring(eac_cpf_xml)
+                self.log.debug(f'{indent}Parsed EAC-CPF XML root element: {root.tag}')
             except ET.ParseError as e:
                 self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
                 return None
