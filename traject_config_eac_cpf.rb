@@ -12,6 +12,7 @@
 require 'traject'
 require 'traject_plus'
 require 'traject_plus/macros'
+require 'time'
 
 # Use TrajectPlus macros (provides extract_xpath and other helpers)
 extend TrajectPlus::Macros
