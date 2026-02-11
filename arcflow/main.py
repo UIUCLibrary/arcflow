@@ -911,7 +911,7 @@ class ArcFlow:
         self.log.info(f'{indent}Updated {updated_count} creator documents with collection links.')
 
 
- def process_creators(self):
+    def process_creators(self):
         """
         Process creator agents and generate standalone creator documents.
 
@@ -926,32 +926,32 @@ class ArcFlow:
         indent = ' ' * indent_size
 
         self.log.info(f'{indent}Processing creator agents...')
-        
+
         # Create agents directory if it doesn't exist
         os.makedirs(agents_dir, exist_ok=True)
-        
+
         # Get agents to process
         agents = self.get_all_agents(modified_since=modified_since, indent_size=indent_size)
-        
+
         # Process agents in parallel
         with Pool(processes=10) as pool:
             results_agents = [pool.apply_async(
                 self.task_agent,
                 args=(agent_uri_item, agents_dir, 1, indent_size))  # Use repo_id=1
                 for agent_uri_item in agents]
-            
+
             creator_ids = [r.get() for r in results_agents]
             creator_ids = [cid for cid in creator_ids if cid is not None]
-        
+
         self.log.info(f'{indent}Created {len(creator_ids)} creator documents.')
-        
+
         # NOTE: Collection links are NOT added to creator XML files.
         # Instead, linking is handled via Solr using the persistent_id field:
         # - Creator bioghist has persistent_id as the 'id' attribute
         # - Collection EADs reference creators via bioghist with persistent_id
         # - Solr indexes both, allowing queries to link them
         # This avoids the expensive operation of scanning all resources to build a linkage map.
-        
+
         # Index creators to Solr (if not skipped)
         if not self.skip_creator_indexing and creator_ids:
             self.log.info(f'{indent}Indexing {len(creator_ids)} creator records to Solr...')
@@ -968,7 +968,7 @@ class ArcFlow:
                 self.log.info(f'{indent}    {agents_dir}/*.xml')
         elif self.skip_creator_indexing:
             self.log.info(f'{indent}Skipping creator indexing (--skip-creator-indexing flag set)')
-        
+
         return creator_ids
 
 
