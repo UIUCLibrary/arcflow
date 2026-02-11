@@ -566,7 +566,10 @@ class ArcFlow:
             ]
             
             if self.traject_extra_config:
-                cmd.extend(self.traject_extra_config.split())
+                if isinstance(self.traject_extra_config, (list, tuple)):
+                    cmd.extend(self.traject_extra_config)
+                else:
+                    cmd.append(self.traject_extra_config)
             
             cmd.append(xml_file_path)
             
