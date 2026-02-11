@@ -577,17 +577,16 @@ class ArcFlow:
                 cmd,
                 cwd=self.arclight_dir,
                 env=env,
-                capture_output=True,
-                text=True
+                stderr=subprocess.PIPE,
             )
-            
+
             if result.stderr:
-                self.log.error(f'{indent}{result.stderr}')
+                self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
             if result.returncode != 0:
                 self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
             else:
                 self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
-        except Exception as e:
+        except  subprocess.CalledProcessError as e:
             self.log.error(f'{indent}Error indexing pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
 
 
@@ -1069,8 +1068,7 @@ class ArcFlow:
                 result = subprocess.run(
                     cmd,
                     cwd=self.arclight_dir,
-                    capture_output=True,
-                    text=True,
+                    stderr=subprocess.PIPE,
                     timeout=300  # 5 minute timeout per batch
                 )
                 
@@ -1081,7 +1079,7 @@ class ArcFlow:
                     failed_count += len(existing_files)
                     self.log.error(f'  Traject failed with exit code {result.returncode}')
                     if result.stderr:
-                        self.log.error(f'  STDERR: {result.stderr}')
+                        self.log.error(f'  STDERR: {result.stderr.decode("utf-8")}')
                     
             except subprocess.TimeoutExpired:
                 self.log.error(f'  Traject timed out for batch {batch_num}/{total_batches}')
@@ -1089,7 +1087,7 @@ class ArcFlow:
             except Exception as e:
                 self.log.error(f'  Error indexing batch {batch_num}/{total_batches}: {e}')
                 failed_count += len(existing_files)
-        
+
         if failed_count > 0:
             self.log.warning(f'Creator indexing completed with errors: {indexed_count} succeeded, {failed_count} failed')
         
