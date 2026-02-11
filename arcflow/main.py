@@ -767,7 +767,6 @@ class ArcFlow:
                 return None
             
             eac_cpf_xml = response.text
-            eac_cpf_xml = response.text
             
             # Parse the EAC-CPF XML to extract key information
             try:
