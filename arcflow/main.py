@@ -9,12 +9,14 @@ import subprocess
 import re
 import logging
 import math
+import sys
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
+from xml.etree import ElementTree as ET
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
-from utils.stage_classifications import extract_labels
+from .utils.stage_classifications import extract_labels
 
 
 base_dir = os.path.abspath((__file__) + "/../../")
@@ -38,7 +40,7 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
         self.solr_url = solr_url
         self.batch_size = 1000
         self.traject_extra_config = f'-c {traject_extra_config}' if traject_extra_config.strip() else ''
@@ -46,6 +48,10 @@ class ArcFlow:
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
         self.force_update = force_update
+        self.agents_only = agents_only
+        self.collections_only = collections_only
+        self.arcuit_dir = arcuit_dir
+        self.skip_creator_indexing = skip_creator_indexing
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -395,6 +401,7 @@ class ArcFlow:
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
         modified_since = int(self.last_updated.timestamp())
+        
         if self.force_update or modified_since <= 0:
             modified_since = 0
             # delete all EADs and related files in ArcLight Solr
@@ -454,7 +461,7 @@ class ArcFlow:
 
             # Tasks for indexing pending resources
             results_3 = [pool.apply_async(
-                self.index,
+                self.index_collections,
                 args=(repo_id, f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
                 for repo_id, batch_num in batches]
 
@@ -527,22 +534,60 @@ class ArcFlow:
             page += 1
 
 
-    def index(self, repo_id, xml_file_path, indent_size=0):
+    def index_collections(self, repo_id, xml_file_path, indent_size=0):
+        """Index collection XML files to Solr using traject."""
         indent = ' ' * indent_size
         self.log.info(f'{indent}Indexing pending resources in repository ID {repo_id} to ArcLight Solr...')
         try:
+            # Get arclight traject config path
+            result_show = subprocess.run(
+                ['bundle', 'show', 'arclight'],
+                capture_output=True,
+                text=True,
+                cwd=self.arclight_dir
+            )
+            arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
+            
+            if not arclight_path:
+                self.log.error(f'{indent}Could not find arclight gem path')
+                return
+            
+            traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
+            
+            cmd = [
+                'bundle', 'exec', 'traject',
+                '-u', self.solr_url,
+                '-s', 'processing_thread_pool=8',
+                '-s', 'solr_writer.thread_pool=8',
+                '-s', f'solr_writer.batch_size={self.batch_size}',
+                '-s', 'solr_writer.commit_on_close=true',
+                '-i', 'xml',
+                '-c', traject_config
+            ]
+            
+            if self.traject_extra_config:
+                cmd.extend(self.traject_extra_config.split())
+            
+            cmd.append(xml_file_path)
+            
+            env = os.environ.copy()
+            env['REPOSITORY_ID'] = str(repo_id)
+            
             result = subprocess.run(
-                f'REPOSITORY_ID={repo_id} bundle exec traject -u {self.solr_url} -s processing_thread_pool=8 -s solr_writer.thread_pool=8 -s solr_writer.batch_size={self.batch_size} -s solr_writer.commit_on_close=true -i xml -c $(bundle show arclight)/lib/arclight/traject/ead2_config.rb {self.traject_extra_config} {xml_file_path}',
-#                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  TRAJECT_SETTINGS="processing_thread_pool=8 solr_writer.thread_pool=8 solr_writer.batch_size=1000 solr_writer.commit_on_close=false" bundle exec rake arcuit:index',
-                shell=True,
+                cmd,
                 cwd=self.arclight_dir,
-                stderr=subprocess.PIPE,)
-            self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
+                env=env,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.stderr:
+                self.log.error(f'{indent}{result.stderr}')
             if result.returncode != 0:
                 self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
             else:
                 self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             self.log.error(f'{indent}Error indexing pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
 
 
@@ -623,6 +668,438 @@ class ArcFlow:
             # an existing bioghist element exists
             return '\n'.join(bioghist_elements)
         return None
+
+
+    def get_all_agents(self, agent_types=None, modified_since=0, indent_size=0):
+        """
+        Fetch ALL agents from ArchivesSpace (not just creators).
+        Uses direct agent API endpoints for comprehensive coverage.
+        
+        Args:
+            agent_types: List of agent types to fetch. Default: ['corporate_entities', 'people', 'families']
+            modified_since: Unix timestamp to filter agents modified since this time (if API supports it)
+            indent_size: Indentation size for logging
+            
+        Returns:
+            set: Set of agent URIs (e.g., '/agents/corporate_entities/123')
+        """
+        if agent_types is None:
+            agent_types = ['corporate_entities', 'people', 'families']
+        
+        indent = ' ' * indent_size
+        all_agents = set()
+        
+        self.log.info(f'{indent}Fetching ALL agents from ArchivesSpace...')
+        
+        for agent_type in agent_types:
+            try:
+                # Try with modified_since parameter first
+                params = {'all_ids': True}
+                if modified_since > 0:
+                    params['modified_since'] = modified_since
+                
+                response = self.client.get(f'/agents/{agent_type}', params=params)
+                agent_ids = response.json()
+                
+                self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents')
+                
+                # Add agent URIs to set
+                for agent_id in agent_ids:
+                    agent_uri = f'/agents/{agent_type}/{agent_id}'
+                    all_agents.add(agent_uri)
+                    
+            except Exception as e:
+                self.log.error(f'{indent}Error fetching {agent_type} agents: {e}')
+                # If modified_since fails, try without it
+                if modified_since > 0:
+                    self.log.warning(f'{indent}Retrying {agent_type} without modified_since filter...')
+                    try:
+                        response = self.client.get(f'/agents/{agent_type}', params={'all_ids': True})
+                        agent_ids = response.json()
+                        self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents (no date filter)')
+                        for agent_id in agent_ids:
+                            agent_uri = f'/agents/{agent_type}/{agent_id}'
+                            all_agents.add(agent_uri)
+                    except Exception as e2:
+                        self.log.error(f'{indent}Failed to fetch {agent_type} agents: {e2}')
+        
+        self.log.info(f'{indent}Found {len(all_agents)} total agents across all types.')
+        return all_agents
+
+
+    def task_agent(self, agent_uri, agents_dir, repo_id=1, indent_size=0):
+        """
+        Process a single agent and generate a creator document in EAC-CPF XML format.
+        Retrieves EAC-CPF directly from ArchivesSpace archival_contexts endpoint.
+        
+        Args:
+            agent_uri: Agent URI from ArchivesSpace (e.g., '/agents/corporate_entities/123')
+            agents_dir: Directory to save agent XML files
+            repo_id: Repository ID to use for archival_contexts endpoint (default: 1)
+            indent_size: Indentation size for logging
+            
+        Returns:
+            str: Creator document ID if successful, None otherwise
+        """
+        indent = ' ' * indent_size
+        
+        try:
+            # Parse agent URI to extract type and ID
+            # URI format: /agents/{agent_type}/{id}
+            parts = agent_uri.strip('/').split('/')
+            if len(parts) != 3 or parts[0] != 'agents':
+                self.log.error(f'{indent}Invalid agent URI format: {agent_uri}')
+                return None
+            
+            agent_type = parts[1]  # e.g., 'corporate_entities', 'people', 'families'
+            agent_id = parts[2]
+            
+            # Construct EAC-CPF endpoint
+            # Format: /repositories/{repo_id}/archival_contexts/{agent_type}/{id}.xml
+            eac_cpf_endpoint = f'/repositories/{repo_id}/archival_contexts/{agent_type}/{agent_id}.xml'
+            
+            self.log.debug(f'{indent}Fetching EAC-CPF from: {eac_cpf_endpoint}')
+            
+            # Fetch EAC-CPF XML
+            response = self.client.get(eac_cpf_endpoint)
+            
+            if response.status_code != 200:
+                self.log.error(f'{indent}Failed to fetch EAC-CPF for {agent_uri}: HTTP {response.status_code}')
+                return None
+            
+            eac_cpf_xml = response.text
+            eac_cpf_xml = response.text
+            
+            # Parse the EAC-CPF XML to extract key information
+            try:
+                root = ET.fromstring(eac_cpf_xml)
+            except ET.ParseError as e:
+                self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
+                return None
+            
+            # Generate creator ID
+            creator_id = f'creator_{agent_type}_{agent_id}'
+            
+            # Save EAC-CPF XML to file
+            filename = f'{agents_dir}/{creator_id}.xml'
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(eac_cpf_xml)
+            
+            self.log.info(f'{indent}Created creator document: {creator_id}')
+            return creator_id
+            
+        except Exception as e:
+            self.log.error(f'{indent}Error processing agent {agent_uri}: {e}')
+            import traceback
+            self.log.error(f'{indent}{traceback.format_exc()}')
+            return None
+
+
+    def update_creator_collection_links(self, agents_dir, indent_size=0):
+        """
+        Update creator documents with links to their associated collections.
+        Scans all resources to build agent -> collections mapping, then updates creator XML files.
+        
+        Args:
+            agents_dir: Directory containing agent XML files
+            indent_size: Indentation size for logging
+        """
+        indent = ' ' * indent_size
+        
+        # Build mapping of agent_uri -> [collection info]
+        self.log.info(f'{indent}Building agent-collection linkage map...')
+        agent_collections = {}
+        
+        repos = self.client.get('repositories').json()
+        for repo in repos:
+            repo_id = self.get_repo_id(repo)
+            resources = self.client.get(
+                f'{repo["uri"]}/resources',
+                params={'all_ids': True}
+            ).json()
+            
+            self.log.info(f'{indent}Processing {len(resources)} resources in repository ID {repo_id}...')
+            
+            for resource_id in resources:
+                try:
+                    resource = self.client.get(
+                        f'{repo["uri"]}/resources/{resource_id}',
+                        params={'resolve': ['linked_agents']}
+                    ).json()
+                    
+                    # Only process published resources
+                    if not resource.get('publish') or resource.get('suppressed'):
+                        continue
+                    
+                    ead_id = resource.get('ead_id', '').replace('.', '-')
+                    
+                    if 'linked_agents' in resource:
+                        for linked_agent in resource['linked_agents']:
+                            if linked_agent.get('role') == 'creator':
+                                agent_ref = linked_agent.get('ref')
+                                if agent_ref:
+                                    if agent_ref not in agent_collections:
+                                        agent_collections[agent_ref] = []
+                                    agent_collections[agent_ref].append({
+                                        'ead_id': ead_id,
+                                        'title': resource.get('title', 'Untitled'),
+                                        'repository': repo.get('name', '')
+                                    })
+                except Exception as e:
+                    self.log.error(f'{indent}Error fetching resource {resource_id}: {e}')
+        
+        # Update creator documents with collection links
+        self.log.info(f'{indent}Updating creator documents with collection links...')
+        updated_count = 0
+        
+        for xml_file in os.listdir(agents_dir):
+            if xml_file.endswith('.xml'):
+                filepath = os.path.join(agents_dir, xml_file)
+                try:
+                    # Parse XML file
+                    tree = ET.parse(filepath)
+                    root = tree.getroot()
+                    
+                    # Find agent URI from controlaccess
+                    agent_uri = None
+                    controlaccess = root.find('.//controlaccess')
+                    if controlaccess is not None:
+                        for name_elem in controlaccess.findall('.//*[@identifier]'):
+                            agent_uri = name_elem.get('identifier')
+                            break
+                    
+                    if not agent_uri:
+                        self.log.warning(f'{indent}Could not find agent URI in {xml_file}')
+                        continue
+                    
+                    if agent_uri in agent_collections:
+                        collections = agent_collections[agent_uri]
+                        
+                        # Find or create relatedmaterial section for collections
+                        archdesc = root.find('.//archdesc')
+                        if archdesc is None:
+                            self.log.warning(f'{indent}No archdesc found in {xml_file}')
+                            continue
+                        
+                        # Remove existing collection relatedmaterial if present
+                        for rm in archdesc.findall('relatedmaterial[@type="collections"]'):
+                            archdesc.remove(rm)
+                        
+                        # Add new relatedmaterial section for collections
+                        relatedmaterial = ET.SubElement(archdesc, 'relatedmaterial')
+                        relatedmaterial.set('type', 'collections')
+                        head = ET.SubElement(relatedmaterial, 'head')
+                        head.text = 'Related Collections'
+                        
+                        # Add each collection
+                        for collection in collections:
+                            item = ET.SubElement(relatedmaterial, 'item')
+                            item.text = collection['title']
+                            item.set('ead_id', collection['ead_id'])
+                            item.set('repository', collection['repository'])
+                        
+                        # Save updated XML
+                        ET.indent(tree, space='  ')
+                        tree.write(filepath, encoding='utf-8', xml_declaration=True)
+                        
+                        updated_count += 1
+                        creator_id = xml_file.replace('.xml', '')
+                        self.log.info(f'{indent}Updated {creator_id} with {len(collections)} collection links')
+                        
+                except Exception as e:
+                    self.log.error(f'{indent}Error updating {xml_file}: {e}')
+        
+        self.log.info(f'{indent}Updated {updated_count} creator documents with collection links.')
+
+
+    def process_creators(self, agents_dir, modified_since=0, agent_uri=None, indent_size=0):
+        """
+        Process creator agents and generate standalone creator documents.
+        
+        Args:
+            agents_dir: Directory to save agent XML files
+            modified_since: Unix timestamp to filter agents modified since this time
+            agent_uri: Optional. If provided, process only this single agent (for testing)
+            indent_size: Indentation size for logging
+            
+        Returns:
+            list: List of created creator document IDs
+        """
+        indent = ' ' * indent_size
+        self.log.info(f'{indent}Processing creator agents...')
+        
+        # Create agents directory if it doesn't exist
+        os.makedirs(agents_dir, exist_ok=True)
+        
+        # Get agents to process
+        if agent_uri:
+            # Single agent mode (for testing)
+            self.log.info(f'{indent}Single agent mode: processing {agent_uri}')
+            agents = {agent_uri}
+        else:
+            # Get ALL agents (not just creators)
+            agents = self.get_all_agents(modified_since=modified_since, indent_size=indent_size)
+        
+        # Process agents in parallel
+        with Pool(processes=10) as pool:
+            results_agents = [pool.apply_async(
+                self.task_agent,
+                args=(agent_uri_item, agents_dir, 1, indent_size))  # Use repo_id=1
+                for agent_uri_item in agents]
+            
+            creator_ids = [r.get() for r in results_agents]
+            creator_ids = [cid for cid in creator_ids if cid is not None]
+        
+        self.log.info(f'{indent}Created {len(creator_ids)} creator documents.')
+        
+        # NOTE: Collection links are NOT added to creator XML files.
+        # Instead, linking is handled via Solr using the persistent_id field:
+        # - Creator bioghist has persistent_id as the 'id' attribute
+        # - Collection EADs reference creators via bioghist with persistent_id
+        # - Solr indexes both, allowing queries to link them
+        # This avoids the expensive operation of scanning all resources to build a linkage map.
+        
+        # Index creators to Solr (if not skipped)
+        if not self.skip_creator_indexing and creator_ids:
+            self.log.info(f'{indent}Indexing {len(creator_ids)} creator records to Solr...')
+            traject_config = self.find_traject_config()
+            if traject_config:
+                indexed = self.index_creators(agents_dir, creator_ids)
+                self.log.info(f'{indent}Creator indexing complete: {indexed}/{len(creator_ids)} indexed')
+            else:
+                self.log.info(f'{indent}Skipping creator indexing (traject config not found)')
+                self.log.info(f'{indent}To index manually:')
+                self.log.info(f'{indent}  cd {self.arclight_dir}')
+                self.log.info(f'{indent}  bundle exec traject -u {self.solr_url} -i xml \\')
+                self.log.info(f'{indent}    -c /path/to/arcuit/arcflow-phase1-revised/traject_config_eac_cpf.rb \\')
+                self.log.info(f'{indent}    {agents_dir}/*.xml')
+        elif self.skip_creator_indexing:
+            self.log.info(f'{indent}Skipping creator indexing (--skip-creator-indexing flag set)')
+        
+        return creator_ids
+
+
+    def find_traject_config(self):
+        """
+        Find the traject config for creator indexing.
+        
+        Tries:
+        1. bundle show arcuit (finds installed gem)
+        2. self.arcuit_dir (explicit path)
+        3. Returns None if neither works
+        
+        Returns:
+            str: Path to traject config, or None if not found
+        """
+        # Try bundle show arcuit first
+        try:
+            result = subprocess.run(
+                ['bundle', 'show', 'arcuit'],
+                cwd=self.arclight_dir,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                arcuit_path = result.stdout.strip()
+                traject_config = f'{arcuit_path}/arcflow-phase1-revised/traject_config_eac_cpf.rb'
+                if os.path.exists(traject_config):
+                    self.log.info(f'Found traject config via bundle show: {traject_config}')
+                    return traject_config
+                else:
+                    self.log.warning(f'bundle show arcuit succeeded but traject config not found at expected path')
+            else:
+                self.log.debug('bundle show arcuit failed (gem not installed?)')
+        except Exception as e:
+            self.log.debug(f'Error running bundle show arcuit: {e}')
+        
+        # Fall back to arcuit_dir if provided
+        if self.arcuit_dir:
+            traject_config = f'{self.arcuit_dir}/arcflow-phase1-revised/traject_config_eac_cpf.rb'
+            if os.path.exists(traject_config):
+                self.log.info(f'Using traject config from arcuit_dir: {traject_config}')
+                return traject_config
+            else:
+                self.log.warning(f'arcuit_dir provided but traject config not found: {traject_config}')
+        
+        # No config found
+        self.log.warning('Could not find traject config (bundle show arcuit failed and arcuit_dir not provided)')
+        return None
+
+
+    def index_creators(self, agents_dir, creator_ids, batch_size=100):
+        """
+        Index creator XML files to Solr using traject.
+        
+        Args:
+            agents_dir: Directory containing creator XML files
+            creator_ids: List of creator IDs to index
+            batch_size: Number of files to index per traject call (default: 100)
+        
+        Returns:
+            int: Number of successfully indexed creators
+        """
+        traject_config = self.find_traject_config()
+        if not traject_config:
+            return 0
+        
+        indexed_count = 0
+        failed_count = 0
+        
+        # Process in batches to avoid command line length limits
+        total_batches = math.ceil(len(creator_ids) / batch_size)
+        for i in range(0, len(creator_ids), batch_size):
+            batch = creator_ids[i:i+batch_size]
+            batch_num = (i // batch_size) + 1
+            
+            # Build list of XML files for this batch
+            xml_files = [f'{agents_dir}/{cid}.xml' for cid in batch]
+            
+            # Filter to only existing files
+            existing_files = [f for f in xml_files if os.path.exists(f)]
+            
+            if not existing_files:
+                self.log.warning(f'  Batch {batch_num}/{total_batches}: No files found, skipping')
+                continue
+            
+            try:
+                cmd = [
+                    'bundle', 'exec', 'traject',
+                    '-u', self.solr_url,
+                    '-i', 'xml',
+                    '-c', traject_config
+                ] + existing_files
+                
+                self.log.info(f'  Indexing batch {batch_num}/{total_batches}: {len(existing_files)} files')
+                
+                result = subprocess.run(
+                    cmd,
+                    cwd=self.arclight_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=300  # 5 minute timeout per batch
+                )
+                
+                if result.returncode == 0:
+                    indexed_count += len(existing_files)
+                    self.log.info(f'  Successfully indexed {len(existing_files)} creators')
+                else:
+                    failed_count += len(existing_files)
+                    self.log.error(f'  Traject failed with exit code {result.returncode}')
+                    if result.stderr:
+                        self.log.error(f'  STDERR: {result.stderr}')
+                    
+            except subprocess.TimeoutExpired:
+                self.log.error(f'  Traject timed out for batch {batch_num}/{total_batches}')
+                failed_count += len(existing_files)
+            except Exception as e:
+                self.log.error(f'  Error indexing batch {batch_num}/{total_batches}: {e}')
+                failed_count += len(existing_files)
+        
+        if failed_count > 0:
+            self.log.warning(f'Creator indexing completed with errors: {indexed_count} succeeded, {failed_count} failed')
+        
+        return indexed_count
 
 
     def get_repo_id(self, repo):
@@ -753,10 +1230,27 @@ class ArcFlow:
         Run the ArcFlow process.
         """
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
-        self.update_repositories()
-        self.update_eads()
+        
+        # Update repositories (unless agents-only mode)
+        if not self.agents_only:
+            self.update_repositories()
+        
+        # Update collections/EADs (unless agents-only mode)
+        if not self.agents_only:
+            self.update_eads()
+        
+        # Update creator records (unless collections-only mode)
+        if not self.collections_only:
+            xml_dir = f'{self.arclight_dir}/public/xml'
+            agents_dir = f'{xml_dir}/agents'
+            modified_since = int(self.last_updated.timestamp())
+            indent_size = 0
+            self.process_creators(agents_dir, modified_since=modified_since, indent_size=indent_size)
+        
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
+
+    
 
 
 def main():
@@ -781,16 +1275,155 @@ def main():
         '--traject-extra-config',
         default='',
         help='Path to extra Traject configuration file',)
+    parser.add_argument(
+        '--agents-only',
+        action='store_true',
+        help='Process only agent records, skip collections (for testing)',)
+    parser.add_argument(
+        '--collections-only',
+        action='store_true',
+        help='Process only repositories and collections, skip creator processing',)
+    parser.add_argument(
+        '--arcuit-dir',
+        default=None,
+        help='Path to arcuit repository (for traject config). If not provided, will try bundle show arcuit.',)
+    parser.add_argument(
+        '--skip-creator-indexing',
+        action='store_true',
+        help='Generate creator XML files but skip Solr indexing (for testing)',)
     args = parser.parse_args()
+    
+    # Validate mutually exclusive flags
+    if args.agents_only and args.collections_only:
+        parser.error('Cannot use both --agents-only and --collections-only')
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
         traject_extra_config=args.traject_extra_config,
-        force_update=args.force_update)
+        force_update=args.force_update,
+        agents_only=args.agents_only,
+        collections_only=args.collections_only,
+        arcuit_dir=args.arcuit_dir,
+        skip_creator_indexing=args.skip_creator_indexing)
     arcflow.run()
 
 
+def test_single_creator():
+    """
+    Test function to process a single creator record.
+    
+    Usage:
+        python -c "from arcflow.main import test_single_creator; test_single_creator()" \
+            --agent-uri /agents/agent_corporate_entities/123 \
+            --arclight-dir /path/to/arclight \
+            --aspace-dir /path/to/archivesspace
+    
+    Or add to a separate test script.
+    """
+    parser = argparse.ArgumentParser(
+        description='Test single creator record processing',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Test a single creator agent
+  python -m arcflow.main test-single-creator \\
+    --agent-uri /agents/agent_corporate_entities/123 \\
+    --arclight-dir /path/to/arclight-app \\
+    --aspace-dir /path/to/archivesspace
+
+  # With environment variables
+  export ARCLIGHT_DIR=/path/to/arclight-app
+  export ASPACE_DIR=/path/to/archivesspace
+  python -m arcflow.main test-single-creator \\
+    --agent-uri /agents/agent_people/456
+        """)
+    
+    parser.add_argument(
+        '--agent-uri',
+        required=True,
+        help='Agent URI to process (e.g., /agents/agent_corporate_entities/123)',)
+    parser.add_argument(
+        '--arclight-dir',
+        default=os.environ.get('ARCLIGHT_DIR'),
+        help='Path to ArcLight installation directory (default: $ARCLIGHT_DIR)',)
+    parser.add_argument(
+        '--aspace-dir',
+        default=os.environ.get('ASPACE_DIR'),
+        help='Path to ArchivesSpace installation directory (default: $ASPACE_DIR)',)
+    parser.add_argument(
+        '--solr-url',
+        default=os.environ.get('SOLR_URL', 'http://localhost:8983/solr/blacklight-core'),
+        help='URL of the Solr core (default: $SOLR_URL or http://localhost:8983/solr/blacklight-core)',)
+    parser.add_argument(
+        '--arcuit-dir',
+        default=os.environ.get('ARCUIT_DIR'),
+        help='Path to arcuit repository (for traject config). If not provided, will try bundle show arcuit.',)
+    parser.add_argument(
+        '--skip-creator-indexing',
+        action='store_true',
+        help='Generate creator XML files but skip Solr indexing',)
+    
+    args = parser.parse_args()
+    
+    # Validate required arguments
+    if not args.arclight_dir:
+        parser.error('--arclight-dir is required (or set $ARCLIGHT_DIR)')
+    if not args.aspace_dir:
+        parser.error('--aspace-dir is required (or set $ASPACE_DIR)')
+    
+    print(f'Testing single creator: {args.agent_uri}')
+    print(f'ArcLight directory: {args.arclight_dir}')
+    print(f'ArchivesSpace directory: {args.aspace_dir}')
+    print(f'Solr URL: {args.solr_url}')
+    print()
+    
+    # Create ArcFlow instance (without running full process)
+    arcflow = ArcFlow(
+        arclight_dir=args.arclight_dir,
+        aspace_dir=args.aspace_dir,
+        solr_url=args.solr_url,
+        traject_extra_config='',
+        force_update=False,
+        arcuit_dir=args.arcuit_dir,
+        skip_creator_indexing=args.skip_creator_indexing)
+    
+    # Process single creator
+    agents_dir = f'{args.arclight_dir}/public/xml/agents'
+    creator_ids = arcflow.process_creators(
+        agents_dir=agents_dir,
+        modified_since=0,
+        agent_uri=args.agent_uri,
+        indent_size=0)
+    
+    if creator_ids:
+        print(f'\nSuccess! Created {len(creator_ids)} creator document(s):')
+        for creator_id in creator_ids:
+            xml_file = f'{agents_dir}/{creator_id}.xml'
+            print(f'  - {xml_file}')
+        
+        if args.skip_creator_indexing:
+            print(f'\nTo index to Solr:')
+            print(f'  cd {args.arclight_dir}')
+            print(f'  bundle exec traject -u {args.solr_url} -i xml \\')
+            print(f'    -c /path/to/arcuit/arcflow-phase1-revised/traject_config_eac_cpf.rb \\')
+            print(f'    public/xml/agents/{creator_ids[0]}.xml')
+        else:
+            print(f'\nIndexing was handled automatically (or check logs if it was skipped)')
+    else:
+        print('\nNo creator documents created. Check that the agent has biographical notes.')
+    
+    # Clean up PID file
+    if os.path.exists(arcflow.pid_file_path):
+        os.remove(arcflow.pid_file_path)
+
+
 if __name__ == '__main__':
-    main()
+    # Check if we're running a subcommand
+    if len(sys.argv) > 1 and sys.argv[1] == 'test-single-creator':
+        # Remove the subcommand from argv so argparse works correctly
+        sys.argv.pop(1)
+        test_single_creator()
+    else:
+        main()
