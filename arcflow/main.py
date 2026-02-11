@@ -912,20 +912,20 @@ class ArcFlow:
         self.log.info(f'{indent}Updated {updated_count} creator documents with collection links.')
 
 
-    def process_creators(self, agents_dir, modified_since=0, agent_uri=None, indent_size=0):
+ def process_creators(self):
         """
         Process creator agents and generate standalone creator documents.
-        
-        Args:
-            agents_dir: Directory to save agent XML files
-            modified_since: Unix timestamp to filter agents modified since this time
-            agent_uri: Optional. If provided, process only this single agent (for testing)
-            indent_size: Indentation size for logging
-            
+
         Returns:
             list: List of created creator document IDs
         """
+
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        agents_dir = f'{xml_dir}/agents'
+        modified_since = int(self.last_updated.timestamp())
+        indent_size = 0
         indent = ' ' * indent_size
+
         self.log.info(f'{indent}Processing creator agents...')
         
         # Create agents directory if it doesn't exist
@@ -1235,11 +1235,7 @@ class ArcFlow:
         
         # Update creator records (unless collections-only mode)
         if not self.collections_only:
-            xml_dir = f'{self.arclight_dir}/public/xml'
-            agents_dir = f'{xml_dir}/agents'
-            modified_since = int(self.last_updated.timestamp())
-            indent_size = 0
-            self.process_creators(agents_dir, modified_since=modified_since, indent_size=indent_size)
+            self.process_creators()
         
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
