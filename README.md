@@ -157,7 +157,7 @@ Optional arguments:
 - `--force-update` - Force update of all data (recreates everything from scratch)
 - `--traject-extra-config` - Path to extra Traject configuration file
 - `--agents-only` - Process only agent records, skip collections (useful for testing agents)
-- `--collections-only` - Skips creators, proccesses EAD, PDF finding aid and indexes collections
+- `--collections-only` - Skips creators, processes EAD, PDF finding aid and indexes collections
 - `--skip-creator-indexing` - Collects EAC-CPF files only, does not index into Solr
 ### Examples
 
