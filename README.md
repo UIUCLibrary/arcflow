@@ -56,21 +56,30 @@ ArcFlow now generates standalone creator documents in addition to collection rec
 Creator documents are stored as XML files in `agents/` directory using the ArchivesSpace EAC-CPF export:
 
 ```xml
-{
-  "id": "creator_agent_corporate_entities_123",
-  "record_type": "creator",
-  "is_creator": true,
-  "agent_type": "agent_corporate_entities",
-  "agent_id": 123,
-  "title": "University Archives",
-  "creator_sort_name": "University Archives",
-  "bioghist_html": "<p>Established in 1963...</p>",
-  "bioghist_text": "Established in 1963...",
-  "dates": "1963-",
-  "collection_ids": ["15-0-1234", "15-0-5678"],
-  "collection_titles": ["Collection A", "Collection B"],
-  "repository": ["University Library"]
-}
+<?xml version="1.0" encoding="UTF-8"?>
+<eac-cpf xml:lang="eng" xmlns="urn:isbn:1-931666-33-4" xmlns:html="http://www.w3.org/1999/xhtml" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:isbn:1-931666-33-4 https://eac.staatsbibliothek-berlin.de/schema/cpf.xsd">
+  <control/>
+  <cpfDescription>
+    <identity>
+      <entityType>corporateBody</entityType>
+      <nameEntry>
+        <part localType="primary_name">Core: Leadership, Infrastructure, Futures</part>
+        <authorizedForm>local</authorizedForm>
+      </nameEntry>
+    </identity>
+    <description>
+      <existDates>
+        <date localType="existence" standardDate="2020">2020-</date>
+      </existDates>
+      <biogHist>
+        <p>Founded on September 1, 2020, the Core: Leadership, Infrastructure, Futures division of the American Library Association has a mission to cultivate and amplify the collective expertise of library workers in core functions through community building, advocacy, and learning.
+          In June 2020, the ALA Council voted to approve Core: Leadership, Infrastructure, Futures as a new ALA division beginning September 1, 2020, and to dissolve the Association for Library Collections and Technical Services (ALCTS), the Library Information Technology Association (LITA) and the Library Leadership and Management Association (LLAMA) effective August 31, 2020. The vote to form Core was 163 to 1.(1)</p>
+        <citation>1. "ALA Council approves Core; dissolves ALCTS, LITA and LLAMA," July 1, 2020, http://www.ala.org/news/member-news/2020/07/ala-council-approves-core-dissolves-alcts-lita-and-llama.</citation>
+      </biogHist>
+    </description>
+    <relations/>
+  </cpfDescription>
+</eac-cpf>
 ```
 
 ### Indexing Creator Documents
