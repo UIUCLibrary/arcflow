@@ -566,7 +566,10 @@ class ArcFlow:
             ]
             
             if self.traject_extra_config:
-                cmd.extend(self.traject_extra_config.split())
+                if isinstance(self.traject_extra_config, (list, tuple)):
+                    cmd.extend(self.traject_extra_config)
+                else:
+                    cmd.append(self.traject_extra_config)
             
             cmd.append(xml_file_path)
             
@@ -768,9 +771,10 @@ class ArcFlow:
             
             eac_cpf_xml = response.text
             
-            # Parse the EAC-CPF XML to extract key information
+            # Parse the EAC-CPF XML to validate and inspect its structure
             try:
                 root = ET.fromstring(eac_cpf_xml)
+                self.log.debug(f'{indent}Parsed EAC-CPF XML root element: {root.tag}')
             except ET.ParseError as e:
                 self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
                 return None
