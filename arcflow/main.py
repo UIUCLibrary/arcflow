@@ -932,13 +932,7 @@ class ArcFlow:
         os.makedirs(agents_dir, exist_ok=True)
         
         # Get agents to process
-        if agent_uri:
-            # Single agent mode (for testing)
-            self.log.info(f'{indent}Single agent mode: processing {agent_uri}')
-            agents = {agent_uri}
-        else:
-            # Get ALL agents (not just creators)
-            agents = self.get_all_agents(modified_since=modified_since, indent_size=indent_size)
+        agents = self.get_all_agents(modified_since=modified_since, indent_size=indent_size)
         
         # Process agents in parallel
         with Pool(processes=10) as pool:
@@ -1310,120 +1304,5 @@ def main():
     arcflow.run()
 
 
-def test_single_creator():
-    """
-    Test function to process a single creator record.
-    
-    Usage:
-        python -c "from arcflow.main import test_single_creator; test_single_creator()" \
-            --agent-uri /agents/agent_corporate_entities/123 \
-            --arclight-dir /path/to/arclight \
-            --aspace-dir /path/to/archivesspace
-    
-    Or add to a separate test script.
-    """
-    parser = argparse.ArgumentParser(
-        description='Test single creator record processing',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Test a single creator agent
-  python -m arcflow.main test-single-creator \\
-    --agent-uri /agents/agent_corporate_entities/123 \\
-    --arclight-dir /path/to/arclight-app \\
-    --aspace-dir /path/to/archivesspace
-
-  # With environment variables
-  export ARCLIGHT_DIR=/path/to/arclight-app
-  export ASPACE_DIR=/path/to/archivesspace
-  python -m arcflow.main test-single-creator \\
-    --agent-uri /agents/agent_people/456
-        """)
-    
-    parser.add_argument(
-        '--agent-uri',
-        required=True,
-        help='Agent URI to process (e.g., /agents/agent_corporate_entities/123)',)
-    parser.add_argument(
-        '--arclight-dir',
-        default=os.environ.get('ARCLIGHT_DIR'),
-        help='Path to ArcLight installation directory (default: $ARCLIGHT_DIR)',)
-    parser.add_argument(
-        '--aspace-dir',
-        default=os.environ.get('ASPACE_DIR'),
-        help='Path to ArchivesSpace installation directory (default: $ASPACE_DIR)',)
-    parser.add_argument(
-        '--solr-url',
-        default=os.environ.get('SOLR_URL', 'http://localhost:8983/solr/blacklight-core'),
-        help='URL of the Solr core (default: $SOLR_URL or http://localhost:8983/solr/blacklight-core)',)
-    parser.add_argument(
-        '--arcuit-dir',
-        default=os.environ.get('ARCUIT_DIR'),
-        help='Path to arcuit repository (for traject config). If not provided, will try bundle show arcuit.',)
-    parser.add_argument(
-        '--skip-creator-indexing',
-        action='store_true',
-        help='Generate creator XML files but skip Solr indexing',)
-    
-    args = parser.parse_args()
-    
-    # Validate required arguments
-    if not args.arclight_dir:
-        parser.error('--arclight-dir is required (or set $ARCLIGHT_DIR)')
-    if not args.aspace_dir:
-        parser.error('--aspace-dir is required (or set $ASPACE_DIR)')
-    
-    print(f'Testing single creator: {args.agent_uri}')
-    print(f'ArcLight directory: {args.arclight_dir}')
-    print(f'ArchivesSpace directory: {args.aspace_dir}')
-    print(f'Solr URL: {args.solr_url}')
-    print()
-    
-    # Create ArcFlow instance (without running full process)
-    arcflow = ArcFlow(
-        arclight_dir=args.arclight_dir,
-        aspace_dir=args.aspace_dir,
-        solr_url=args.solr_url,
-        traject_extra_config='',
-        force_update=False,
-        arcuit_dir=args.arcuit_dir,
-        skip_creator_indexing=args.skip_creator_indexing)
-    
-    # Process single creator
-    agents_dir = f'{args.arclight_dir}/public/xml/agents'
-    creator_ids = arcflow.process_creators(
-        agents_dir=agents_dir,
-        modified_since=0,
-        agent_uri=args.agent_uri,
-        indent_size=0)
-    
-    if creator_ids:
-        print(f'\nSuccess! Created {len(creator_ids)} creator document(s):')
-        for creator_id in creator_ids:
-            xml_file = f'{agents_dir}/{creator_id}.xml'
-            print(f'  - {xml_file}')
-        
-        if args.skip_creator_indexing:
-            print(f'\nTo index to Solr:')
-            print(f'  cd {args.arclight_dir}')
-            print(f'  bundle exec traject -u {args.solr_url} -i xml \\')
-            print(f'    -c /path/to/arcuit/arcflow-phase1-revised/traject_config_eac_cpf.rb \\')
-            print(f'    public/xml/agents/{creator_ids[0]}.xml')
-        else:
-            print(f'\nIndexing was handled automatically (or check logs if it was skipped)')
-    else:
-        print('\nNo creator documents created. Check that the agent has biographical notes.')
-    
-    # Clean up PID file
-    if os.path.exists(arcflow.pid_file_path):
-        os.remove(arcflow.pid_file_path)
-
-
 if __name__ == '__main__':
-    # Check if we're running a subcommand
-    if len(sys.argv) > 1 and sys.argv[1] == 'test-single-creator':
-        # Remove the subcommand from argv so argparse works correctly
-        sys.argv.pop(1)
-        test_single_creator()
-    else:
-        main()
+    main()
