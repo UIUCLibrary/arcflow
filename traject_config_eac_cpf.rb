@@ -17,6 +17,9 @@ require 'time'
 # Use TrajectPlus macros (provides extract_xpath and other helpers)
 extend TrajectPlus::Macros
 
+# EAC-CPF namespace - used consistently throughout this config
+EAC_NS = { 'eac' => 'urn:isbn:1-931666-33-4' }
+
 settings do
   provide "solr.url", ENV['SOLR_URL'] || "http://localhost:8983/solr/blacklight-core"
   provide "solr_writer.commit_on_close", "true"
@@ -41,9 +44,7 @@ end
 # Cannot rely on recordId being present. Must extract from filename or generate.
 to_field 'id' do |record, accumulator, context|
   # Try 1: Extract from control/recordId (if present)
-  record_id = record.xpath('//eac-cpf:control/eac-cpf:recordId',
-                           'eac-cpf' => 'urn:isbn:1-931666-33-4').first
-  record_id ||= record.xpath('//control/recordId').first
+  record_id = record.xpath('//eac:control/eac:recordId', EAC_NS).first
   
   if record_id && !record_id.text.strip.empty?
     accumulator << record_id.text.strip
@@ -60,8 +61,8 @@ to_field 'id' do |record, accumulator, context|
         context.logger.info("Using filename-based ID: #{id_from_filename}")
       else
         # Try 3: Generate from entity type and name
-        entity_type = record.xpath('//identity/entityType').first&.text&.strip
-        name_entry = record.xpath('//identity/nameEntry/part').first&.text&.strip
+        entity_type = record.xpath('//eac:cpfDescription/eac:identity/eac:entityType', EAC_NS).first&.text&.strip
+        name_entry = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS).first&.text&.strip
         
         if entity_type && name_entry
           # Create stable ID from type and name
@@ -84,8 +85,8 @@ to_field 'id' do |record, accumulator, context|
       end
     else
       # No filename available, generate from name
-      entity_type = record.xpath('//identity/entityType').first&.text&.strip
-      name_entry = record.xpath('//identity/nameEntry/part').first&.text&.strip
+      entity_type = record.xpath('//eac:cpfDescription/eac:identity/eac:entityType', EAC_NS).first&.text&.strip
+      name_entry = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS).first&.text&.strip
       
       if entity_type && name_entry
         type_short = case entity_type
@@ -120,38 +121,23 @@ end
 
 # Entity type (corporateBody, person, family)
 to_field 'entity_type' do |record, accumulator|
-  entity = record.xpath('//cpfDescription/identity/entityType', 
-                       'eac-cpf' => 'urn:isbn:1-931666-33-4').first
-  if entity
-    accumulator << entity.text
-  else
-    # Fallback without namespace
-    entity = record.xpath('//identity/entityType').first
-    accumulator << entity.text if entity
-  end
+  entity = record.xpath('//eac:cpfDescription/eac:identity/eac:entityType', EAC_NS).first
+  accumulator << entity.text if entity
 end
 
 # Title/name fields - from authorized form of name
 to_field 'title' do |record, accumulator|
-  # Try with namespace
-  name = record.xpath('//cpfDescription/identity/nameEntry/part', 
-                     'eac-cpf' => 'urn:isbn:1-931666-33-4')
-  if name.any?
-    accumulator << name.map(&:text).join(' ')
-  else
-    # Fallback without namespace
-    name = record.xpath('//identity/nameEntry/part')
-    accumulator << name.map(&:text).join(' ') if name.any?
-  end
+  name = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS)
+  accumulator << name.map(&:text).join(' ') if name.any?
 end
 
 to_field 'title_display' do |record, accumulator|
-  name = record.xpath('//identity/nameEntry/part')
+  name = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS)
   accumulator << name.map(&:text).join(' ') if name.any?
 end
 
 to_field 'title_sort' do |record, accumulator|
-  name = record.xpath('//identity/nameEntry/part')
+  name = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS)
   if name.any?
     text = name.map(&:text).join(' ')
     accumulator << text.gsub(/^(a|an|the)\s+/i, '').downcase
@@ -161,10 +147,11 @@ end
 # Dates of existence
 to_field 'dates' do |record, accumulator|
   # Try existDates element
-  dates = record.xpath('//existDates/dateRange/fromDate | //existDates/dateRange/toDate | //existDates/date')
+  base_path = '//eac:cpfDescription/eac:description/eac:existDates'
+  dates = record.xpath("#{base_path}/eac:dateRange/eac:fromDate | #{base_path}/eac:dateRange/eac:toDate | #{base_path}/eac:date", EAC_NS)
   if dates.any?
-    from_date = record.xpath('//existDates/dateRange/fromDate').first
-    to_date = record.xpath('//existDates/dateRange/toDate').first
+    from_date = record.xpath("#{base_path}/eac:dateRange/eac:fromDate", EAC_NS).first
+    to_date = record.xpath("#{base_path}/eac:dateRange/eac:toDate", EAC_NS).first
     
     if from_date || to_date
       from_text = from_date ? from_date.text : ''
@@ -180,7 +167,7 @@ end
 # Biographical/historical note - text content
 to_field 'bioghist_text' do |record, accumulator|
   # Extract text from biogHist elements
-  bioghist = record.xpath('//biogHist//p')
+  bioghist = record.xpath('//eac:cpfDescription/eac:description/eac:biogHist//eac:p', EAC_NS)
   if bioghist.any?
     text = bioghist.map(&:text).join(' ')
     accumulator << text
@@ -189,7 +176,7 @@ end
 
 # Biographical/historical note - HTML
 to_field 'bioghist_html' do |record, accumulator|
-  bioghist = record.xpath('//biogHist//p')
+  bioghist = record.xpath('//eac:cpfDescription/eac:description/eac:biogHist//eac:p', EAC_NS)
   if bioghist.any?
     html = bioghist.map { |p| "<p>#{p.text}</p>" }.join("\n")
     accumulator << html
@@ -199,17 +186,17 @@ end
 # Full-text search field
 to_field 'text' do |record, accumulator|
   # Title
-  name = record.xpath('//identity/nameEntry/part')
+  name = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS)
   accumulator << name.map(&:text).join(' ') if name.any?
   
   # Bioghist
-  bioghist = record.xpath('//biogHist//p')
+  bioghist = record.xpath('//eac:cpfDescription/eac:description/eac:biogHist//eac:p', EAC_NS)
   accumulator << bioghist.map(&:text).join(' ') if bioghist.any?
 end
 
 # Related agents (from cpfRelation elements)
 to_field 'related_agents_ssim' do |record, accumulator|
-  relations = record.xpath('//cpfRelation')
+  relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
     # Get the related entity href/identifier
     href = rel['href'] || rel['xlink:href']
@@ -218,7 +205,7 @@ to_field 'related_agents_ssim' do |record, accumulator|
     if href
       # Store as: "uri|type" for easy parsing later
       accumulator << "#{href}|#{relation_type}"
-    elsif relation_entry = rel.xpath('relationEntry').first
+    elsif relation_entry = rel.xpath('eac:relationEntry', EAC_NS).first
       # If no href, at least store the name
       name = relation_entry.text
       accumulator << "#{name}|#{relation_type}" if name
@@ -228,7 +215,7 @@ end
 
 # Related agents - just URIs (for simpler queries)
 to_field 'related_agent_uris_ssim' do |record, accumulator|
-  relations = record.xpath('//cpfRelation')
+  relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
     href = rel['href'] || rel['xlink:href']
     accumulator << href if href
@@ -237,7 +224,7 @@ end
 
 # Relationship types
 to_field 'relationship_types_ssim' do |record, accumulator|
-  relations = record.xpath('//cpfRelation')
+  relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
     relation_type = rel['cpfRelationType']
     accumulator << relation_type if relation_type && !accumulator.include?(relation_type)
@@ -247,7 +234,7 @@ end
 # Agent source URI (from original ArchivesSpace)
 to_field 'agent_uri' do |record, accumulator|
   # Try to extract from control section or otherRecordId
-  other_id = record.xpath('//control/otherRecordId[@localType="archivesspace_uri"]').first
+  other_id = record.xpath('//eac:control/eac:otherRecordId[@localType="archivesspace_uri"]', EAC_NS).first
   if other_id
     accumulator << other_id.text
   end
@@ -265,7 +252,7 @@ end
 
 # Log successful indexing
 each_record do |record, context|
-  record_id = record.xpath('//control/recordId').first
+  record_id = record.xpath('//eac:control/eac:recordId', EAC_NS).first
   if record_id
     context.logger.info("Indexed creator: #{record_id.text}")
   end
