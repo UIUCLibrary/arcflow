@@ -147,10 +147,11 @@ end
 # Dates of existence
 to_field 'dates' do |record, accumulator|
   # Try existDates element
-  dates = record.xpath('//eac:cpfDescription/eac:description/eac:existDates/eac:dateRange/eac:fromDate | //eac:cpfDescription/eac:description/eac:existDates/eac:dateRange/eac:toDate | //eac:cpfDescription/eac:description/eac:existDates/eac:date', EAC_NS)
+  base_path = '//eac:cpfDescription/eac:description/eac:existDates'
+  dates = record.xpath("#{base_path}/eac:dateRange/eac:fromDate | #{base_path}/eac:dateRange/eac:toDate | #{base_path}/eac:date", EAC_NS)
   if dates.any?
-    from_date = record.xpath('//eac:cpfDescription/eac:description/eac:existDates/eac:dateRange/eac:fromDate', EAC_NS).first
-    to_date = record.xpath('//eac:cpfDescription/eac:description/eac:existDates/eac:dateRange/eac:toDate', EAC_NS).first
+    from_date = record.xpath("#{base_path}/eac:dateRange/eac:fromDate", EAC_NS).first
+    to_date = record.xpath("#{base_path}/eac:dateRange/eac:toDate", EAC_NS).first
     
     if from_date || to_date
       from_text = from_date ? from_date.text : ''
