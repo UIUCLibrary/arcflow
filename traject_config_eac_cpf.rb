@@ -41,8 +41,8 @@ end
 # Cannot rely on recordId being present. Must extract from filename or generate.
 to_field 'id' do |record, accumulator, context|
   # Try 1: Extract from control/recordId (if present)
-  record_id = record.xpath('//eac-cpf/control/recordId', 
-                          'eac-cpf' => 'urn:isbn:1-931666-33-4').first
+  record_id = record.xpath('//eac-cpf:control/eac-cpf:recordId',
+                           'eac-cpf' => 'urn:isbn:1-931666-33-4').first
   record_id ||= record.xpath('//control/recordId').first
   
   if record_id && !record_id.text.strip.empty?
