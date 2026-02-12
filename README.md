@@ -42,7 +42,7 @@ ArcFlow now generates standalone creator documents in addition to collection rec
 - Link to all collections where the creator is listed
 - Can be searched and displayed independently in ArcLight
 - Are marked with `is_creator: true` to distinguish from collections
-- Must be fed into a Solr instance with fields to match their specific facets (See:Configure Solr Schema below )
+- Must be fed into a Solr instance with fields to match their specific facets (See: Configure Solr Schema below)
 
 ### How Creator Records Work
 
