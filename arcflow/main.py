@@ -43,7 +43,8 @@ class ArcFlow:
     def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
         self.solr_url = solr_url
         self.batch_size = 1000
-        self.traject_extra_config = f'-c {traject_extra_config}' if traject_extra_config.strip() else ''
+        clean_extra_config = traject_extra_config.strip()
+        self.traject_extra_config = clean_extra_config or None
         self.arclight_dir = arclight_dir
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
