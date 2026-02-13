@@ -187,7 +187,8 @@ to_field 'bioghist_html_tesm' do |record, accumulator|
   # Extract HTML for searchable content (matches ArcLight's bioghist_html_tesm)
   bioghist = record.xpath('//eac:cpfDescription/eac:description/eac:biogHist//eac:p', EAC_NS)
   if bioghist.any?
-    html = bioghist.map { |p| "<p>#{p.text}</p>" }.join("\n")
+    # Preserve inline EAC markup inside <eac:p> by serializing child nodes
+    html = bioghist.map { |p| "<p>#{p.inner_html}</p>" }.join("\n")
     accumulator << html
   end
 end
