@@ -44,12 +44,30 @@ ArcFlow now generates standalone creator documents in addition to collection rec
 - Are marked with `is_creator: true` to distinguish from collections
 - Must be fed into a Solr instance with fields to match their specific facets (See: Configure Solr Schema below)
 
+### Agent Filtering
+
+**ArcFlow automatically filters agents to include only legitimate creators** of archival materials. The following agent types are **excluded** from indexing:
+
+- ✗ **System users** - ArchivesSpace software users (identified by `is_user` field)
+- ✗ **System-generated agents** - Auto-created for users (identified by `system_generated` field)
+- ✗ **Software agents** - Excluded by not querying the `/agents/software` endpoint
+- ✗ **Repository agents** - Corporate entities representing the repository itself (identified by `is_repo_agent` field)
+- ✗ **Donor-only agents** - Agents with only the 'donor' role and no creator role
+
+**Agents are included if they meet any of these criteria:**
+
+- ✓ Have the **'creator' role** in linked_agent_roles
+- ✓ Are **linked to published records** (and not excluded by filters above)
+
+This filtering ensures that only legitimate archival creators are discoverable in ArcLight, while protecting privacy and security by excluding system users and donors.
+
 ### How Creator Records Work
 
 1. **Extraction**: `get_all_agents()` fetches all agents from ArchivesSpace
-2. **Processing**: `task_agent()` generates an EAC-CPF XML document for each agent with bioghist notes
-3. **Linking**: Handled via Solr using the persistent_id field (agents and collections linked through bioghist references)
-4. **Indexing**: Creator XML files are indexed to Solr using `traject_config_eac_cpf.rb`
+2. **Filtering**: `is_target_agent()` filters out system users, donors, and non-creator agents  
+3. **Processing**: `task_agent()` generates an EAC-CPF XML document for each target agent with bioghist notes
+4. **Linking**: Handled via Solr using the persistent_id field (agents and collections linked through bioghist references)
+5. **Indexing**: Creator XML files are indexed to Solr using `traject_config_eac_cpf.rb`
 
 ### Creator Document Format
 
