@@ -215,7 +215,7 @@ to_field 'related_agents_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
     # Get the related entity href/identifier
-    href = rel['href'] || rel['xlink:href']
+    href = rel['href'] || rel.attribute_with_ns('href', 'http://www.w3.org/1999/xlink')&.value
     relation_type = rel['cpfRelationType']
     
     if href
@@ -233,7 +233,7 @@ end
 to_field 'related_agent_uris_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
-    href = rel['href'] || rel['xlink:href']
+    href = rel['href'] || rel.attribute_with_ns('href', 'http://www.w3.org/1999/xlink')&.value
     accumulator << href if href
   end
 end
