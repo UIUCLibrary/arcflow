@@ -681,9 +681,10 @@ class ArcFlow:
         Excludes:
         - System users (is_user field present)
         - System-generated agents (system_generated = true)
-        - Software agents (agent_type = 'agent_software')
         - Repository agents (is_repo_agent field present)
         - Donor-only agents (only has 'donor' role, no creator role)
+        
+        Note: Software agents are excluded by not querying /agents/software endpoint.
         
         Args:
             agent: Agent record from ArchivesSpace API
@@ -699,15 +700,11 @@ class ArcFlow:
         if agent.get('system_generated'):
             return False
         
-        # TIER 3: Exclude software agents
-        if agent.get('agent_type') == 'agent_software':
-            return False
-        
-        # TIER 4: Exclude repository agents (corporate entities only)
+        # TIER 3: Exclude repository agents (corporate entities only)
         if agent.get('is_repo_agent'):
             return False
         
-        # TIER 5: Role-based filtering
+        # TIER 4: Role-based filtering
         roles = agent.get('linked_agent_roles', [])
         
         # Include if explicitly marked as creator
@@ -718,7 +715,7 @@ class ArcFlow:
         if roles == ['donor']:
             return False
         
-        # TIER 6: Default - include if linked to published records
+        # TIER 5: Default - include if linked to published records
         # (covers cases where roles aren't populated yet)
         return agent.get('is_linked_to_published_record', False)
 
@@ -744,7 +741,6 @@ class ArcFlow:
             'total': 0,
             'excluded_user': 0,
             'excluded_system_generated': 0,
-            'excluded_software': 0,
             'excluded_repo_agent': 0,
             'excluded_donor_only': 0,
             'excluded_no_links': 0,
@@ -782,10 +778,6 @@ class ArcFlow:
                         
                         if agent.get('system_generated'):
                             stats['excluded_system_generated'] += 1
-                            continue
-                        
-                        if agent.get('agent_type') == 'agent_software':
-                            stats['excluded_software'] += 1
                             continue
                         
                         if agent.get('is_repo_agent'):
@@ -853,7 +845,6 @@ class ArcFlow:
         self.log.info(f'{indent}  Included (target creators): {stats["included"]}')
         self.log.info(f'{indent}  Excluded (system users): {stats["excluded_user"]}')
         self.log.info(f'{indent}  Excluded (system-generated): {stats["excluded_system_generated"]}')
-        self.log.info(f'{indent}  Excluded (software agents): {stats["excluded_software"]}')
         self.log.info(f'{indent}  Excluded (repository agents): {stats["excluded_repo_agent"]}')
         self.log.info(f'{indent}  Excluded (donor-only): {stats["excluded_donor_only"]}')
         self.log.info(f'{indent}  Excluded (no published links): {stats["excluded_no_links"]}')

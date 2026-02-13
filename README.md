@@ -50,7 +50,7 @@ ArcFlow now generates standalone creator documents in addition to collection rec
 
 - ✗ **System users** - ArchivesSpace software users (identified by `is_user` field)
 - ✗ **System-generated agents** - Auto-created for users (identified by `system_generated` field)
-- ✗ **Software agents** - Non-human agents (identified by `agent_type = 'agent_software'`)
+- ✗ **Software agents** - Excluded by not querying the `/agents/software` endpoint
 - ✗ **Repository agents** - Corporate entities representing the repository itself (identified by `is_repo_agent` field)
 - ✗ **Donor-only agents** - Agents with only the 'donor' role and no creator role
 
