@@ -583,16 +583,17 @@ class ArcFlow:
                 cwd=self.arclight_dir,
                 env=env,
                 stderr=subprocess.PIPE,
+                check=True,
             )
 
             if result.stderr:
                 self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
-            if result.returncode != 0:
-                self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
-            else:
-                self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
-        except  subprocess.CalledProcessError as e:
+            
+            self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
+        except subprocess.CalledProcessError as e:
             self.log.error(f'{indent}Error indexing pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
+            if e.stderr:
+                self.log.error(f'{indent}{e.stderr.decode("utf-8")}')
 
 
     def get_creator_bioghist(self, resource, indent_size=0):
