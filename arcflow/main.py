@@ -591,7 +591,7 @@ class ArcFlow:
                 self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
             else:
                 self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
-        except  subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError as e:
             self.log.error(f'{indent}Error indexing pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
 
 
