@@ -77,10 +77,14 @@ to_field 'id' do |record, accumulator, context|
           accumulator << generated_id
           context.logger.warn("Generated ID from name: #{generated_id}")
         else
-          # Last resort: timestamp-based unique ID
-          fallback_id = "creator_unknown_#{Time.now.to_i}_#{rand(10000)}"
-          accumulator << fallback_id
-          context.logger.error("Using fallback ID: #{fallback_id}")
+          # No valid ID available - skip indexing this record
+          # If we reach here, something has gone wrong with the data pipeline:
+          # - No recordId in XML
+          # - Filename doesn't match expected pattern
+          # - No entity type or name in XML to generate from
+          # Skipping ensures we don't create non-deterministic IDs that break idempotent indexing
+          context.logger.error("Cannot generate valid ID for record - skipping indexing. Source: #{source_file}")
+          context.skip!("Missing required ID data")
         end
       end
     else
@@ -100,10 +104,14 @@ to_field 'id' do |record, accumulator, context|
         accumulator << generated_id
         context.logger.warn("Generated ID from name: #{generated_id}")
       else
-        # Absolute last resort
-        fallback_id = "creator_unknown_#{Time.now.to_i}_#{rand(10000)}"
-        accumulator << fallback_id
-        context.logger.error("Using fallback ID: #{fallback_id}")
+        # No valid ID available - skip indexing this record
+        # If we reach here, something has gone wrong with the data pipeline:
+        # - No recordId in XML
+        # - No filename available
+        # - No entity type or name in XML to generate from
+        # Skipping ensures we don't create non-deterministic IDs that break idempotent indexing
+        context.logger.error("Cannot generate valid ID for record - skipping indexing. No filename or entity data available.")
+        context.skip!("Missing required ID data")
       end
     end
   end
