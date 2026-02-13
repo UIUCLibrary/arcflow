@@ -125,27 +125,32 @@ to_field 'entity_type' do |record, accumulator|
   accumulator << entity.text if entity
 end
 
-# Title/name fields - from authorized form of name
-to_field 'title' do |record, accumulator|
+# Title/name fields - using ArcLight dynamic field naming convention
+# _tesim = text, stored, indexed, multiValued (for full-text search)
+# _ssm = string, stored, multiValued (for display)
+# _ssi = string, stored, indexed (for faceting/sorting)
+to_field 'title_tesim' do |record, accumulator|
   name = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS)
   accumulator << name.map(&:text).join(' ') if name.any?
 end
 
-to_field 'title_display' do |record, accumulator|
+to_field 'title_ssm' do |record, accumulator|
   name = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS)
   accumulator << name.map(&:text).join(' ') if name.any?
 end
 
-to_field 'title_sort' do |record, accumulator|
+to_field 'title_filing_ssi' do |record, accumulator|
   name = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS)
   if name.any?
     text = name.map(&:text).join(' ')
+    # Remove leading articles and convert to lowercase for filing
     accumulator << text.gsub(/^(a|an|the)\s+/i, '').downcase
   end
 end
 
-# Dates of existence
-to_field 'dates' do |record, accumulator|
+# Dates of existence - using ArcLight standard field unitdate_ssm
+# (matches what ArcLight uses for collection dates)
+to_field 'unitdate_ssm' do |record, accumulator|
   # Try existDates element
   base_path = '//eac:cpfDescription/eac:description/eac:existDates'
   dates = record.xpath("#{base_path}/eac:dateRange/eac:fromDate | #{base_path}/eac:dateRange/eac:toDate | #{base_path}/eac:date", EAC_NS)
@@ -164,9 +169,12 @@ to_field 'dates' do |record, accumulator|
   end
 end
 
-# Biographical/historical note - text content
-to_field 'bioghist_text' do |record, accumulator|
-  # Extract text from biogHist elements
+# Biographical/historical note - using ArcLight conventions
+# _tesim for searchable plain text
+# _tesm for searchable HTML (text, stored, multiValued but not for display)
+# _ssm for section heading display
+to_field 'bioghist_tesim' do |record, accumulator|
+  # Extract text from biogHist elements for full-text search
   bioghist = record.xpath('//eac:cpfDescription/eac:description/eac:biogHist//eac:p', EAC_NS)
   if bioghist.any?
     text = bioghist.map(&:text).join(' ')
@@ -175,12 +183,19 @@ to_field 'bioghist_text' do |record, accumulator|
 end
 
 # Biographical/historical note - HTML
-to_field 'bioghist_html' do |record, accumulator|
+to_field 'bioghist_html_tesm' do |record, accumulator|
+  # Extract HTML for searchable content (matches ArcLight's bioghist_html_tesm)
   bioghist = record.xpath('//eac:cpfDescription/eac:description/eac:biogHist//eac:p', EAC_NS)
   if bioghist.any?
     html = bioghist.map { |p| "<p>#{p.text}</p>" }.join("\n")
     accumulator << html
   end
+end
+
+to_field 'bioghist_heading_ssm' do |record, accumulator|
+  # Extract section heading (matches ArcLight's bioghist_heading_ssm pattern)
+  heading = record.xpath('//eac:cpfDescription/eac:description/eac:biogHist//eac:head', EAC_NS).first
+  accumulator << heading.text if heading
 end
 
 # Full-text search field
