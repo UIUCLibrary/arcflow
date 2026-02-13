@@ -674,10 +674,58 @@ class ArcFlow:
         return None
 
 
+    def is_target_agent(self, agent):
+        """
+        Determine if agent is a target creator of archival materials.
+        
+        Excludes:
+        - System users (is_user field present)
+        - System-generated agents (system_generated = true)
+        - Software agents (agent_type = 'agent_software')
+        - Repository agents (is_repo_agent field present)
+        - Donor-only agents (only has 'donor' role, no creator role)
+        
+        Args:
+            agent: Agent record from ArchivesSpace API
+            
+        Returns:
+            bool: True if agent should be indexed, False to exclude
+        """
+        # TIER 1: Exclude system users (PRIMARY FILTER)
+        if agent.get('is_user'):
+            return False
+        
+        # TIER 2: Exclude system-generated agents
+        if agent.get('system_generated'):
+            return False
+        
+        # TIER 3: Exclude software agents
+        if agent.get('agent_type') == 'agent_software':
+            return False
+        
+        # TIER 4: Exclude repository agents (corporate entities only)
+        if agent.get('is_repo_agent'):
+            return False
+        
+        # TIER 5: Role-based filtering
+        roles = agent.get('linked_agent_roles', [])
+        
+        # Include if explicitly marked as creator
+        if 'creator' in roles:
+            return True
+        
+        # Exclude if ONLY marked as donor
+        if roles == ['donor']:
+            return False
+        
+        # TIER 6: Default - include if linked to published records
+        # (covers cases where roles aren't populated yet)
+        return agent.get('is_linked_to_published_record', False)
+
     def get_all_agents(self, agent_types=None, modified_since=0, indent_size=0):
         """
-        Fetch ALL agents from ArchivesSpace (not just creators).
-        Uses direct agent API endpoints for comprehensive coverage.
+        Fetch target agents from ArchivesSpace and filter to creators only.
+        Excludes system users, donors, and other non-creator agents.
         
         Args:
             agent_types: List of agent types to fetch. Default: ['corporate_entities', 'people', 'families']
@@ -685,15 +733,25 @@ class ArcFlow:
             indent_size: Indentation size for logging
             
         Returns:
-            set: Set of agent URIs (e.g., '/agents/corporate_entities/123')
+            list: List of filtered agent URIs (e.g., '/agents/corporate_entities/123')
         """
         if agent_types is None:
             agent_types = ['corporate_entities', 'people', 'families']
         
         indent = ' ' * indent_size
-        all_agents = set()
+        target_agents = []
+        stats = {
+            'total': 0,
+            'excluded_user': 0,
+            'excluded_system_generated': 0,
+            'excluded_software': 0,
+            'excluded_repo_agent': 0,
+            'excluded_donor_only': 0,
+            'excluded_no_links': 0,
+            'included': 0
+        }
         
-        self.log.info(f'{indent}Fetching ALL agents from ArchivesSpace...')
+        self.log.info(f'{indent}Fetching agents from ArchivesSpace and applying filters...')
         
         for agent_type in agent_types:
             try:
@@ -705,12 +763,59 @@ class ArcFlow:
                 response = self.client.get(f'/agents/{agent_type}', params=params)
                 agent_ids = response.json()
                 
-                self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents')
+                self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents, filtering...')
                 
-                # Add agent URIs to set
+                # Fetch and filter each agent
                 for agent_id in agent_ids:
+                    stats['total'] += 1
                     agent_uri = f'/agents/{agent_type}/{agent_id}'
-                    all_agents.add(agent_uri)
+                    
+                    try:
+                        # Fetch full agent record to access filtering fields
+                        agent_response = self.client.get(agent_uri)
+                        agent = agent_response.json()
+                        
+                        # Apply filtering logic
+                        if agent.get('is_user'):
+                            stats['excluded_user'] += 1
+                            continue
+                        
+                        if agent.get('system_generated'):
+                            stats['excluded_system_generated'] += 1
+                            continue
+                        
+                        if agent.get('agent_type') == 'agent_software':
+                            stats['excluded_software'] += 1
+                            continue
+                        
+                        if agent.get('is_repo_agent'):
+                            stats['excluded_repo_agent'] += 1
+                            continue
+                        
+                        roles = agent.get('linked_agent_roles', [])
+                        
+                        # Include creators
+                        if 'creator' in roles:
+                            stats['included'] += 1
+                            target_agents.append(agent_uri)
+                            continue
+                        
+                        # Exclude donor-only agents
+                        if roles == ['donor']:
+                            stats['excluded_donor_only'] += 1
+                            continue
+                        
+                        # Default: include if linked to published records
+                        if agent.get('is_linked_to_published_record', False):
+                            stats['included'] += 1
+                            target_agents.append(agent_uri)
+                        else:
+                            stats['excluded_no_links'] += 1
+                            
+                    except Exception as e:
+                        self.log.warning(f'{indent}Error fetching agent {agent_uri}: {e}')
+                        # On error, include the agent (fail-open)
+                        target_agents.append(agent_uri)
                     
             except Exception as e:
                 self.log.error(f'{indent}Error fetching {agent_type} agents: {e}')
@@ -721,14 +826,39 @@ class ArcFlow:
                         response = self.client.get(f'/agents/{agent_type}', params={'all_ids': True})
                         agent_ids = response.json()
                         self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents (no date filter)')
+                        
+                        # Re-process with filtering
                         for agent_id in agent_ids:
+                            stats['total'] += 1
                             agent_uri = f'/agents/{agent_type}/{agent_id}'
-                            all_agents.add(agent_uri)
+                            
+                            try:
+                                agent_response = self.client.get(agent_uri)
+                                agent = agent_response.json()
+                                
+                                if self.is_target_agent(agent):
+                                    stats['included'] += 1
+                                    target_agents.append(agent_uri)
+                                    
+                            except Exception as e:
+                                self.log.warning(f'{indent}Error fetching agent {agent_uri}: {e}')
+                                target_agents.append(agent_uri)
+                                
                     except Exception as e2:
                         self.log.error(f'{indent}Failed to fetch {agent_type} agents: {e2}')
         
-        self.log.info(f'{indent}Found {len(all_agents)} total agents across all types.')
-        return all_agents
+        # Log filtering statistics
+        self.log.info(f'{indent}Agent filtering complete:')
+        self.log.info(f'{indent}  Total agents processed: {stats["total"]}')
+        self.log.info(f'{indent}  Included (target creators): {stats["included"]}')
+        self.log.info(f'{indent}  Excluded (system users): {stats["excluded_user"]}')
+        self.log.info(f'{indent}  Excluded (system-generated): {stats["excluded_system_generated"]}')
+        self.log.info(f'{indent}  Excluded (software agents): {stats["excluded_software"]}')
+        self.log.info(f'{indent}  Excluded (repository agents): {stats["excluded_repo_agent"]}')
+        self.log.info(f'{indent}  Excluded (donor-only): {stats["excluded_donor_only"]}')
+        self.log.info(f'{indent}  Excluded (no published links): {stats["excluded_no_links"]}')
+        
+        return target_agents
 
 
     def task_agent(self, agent_uri, agents_dir, repo_id=1, indent_size=0):
