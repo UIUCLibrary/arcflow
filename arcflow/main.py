@@ -570,7 +570,8 @@ class ArcFlow:
                 if isinstance(self.traject_extra_config, (list, tuple)):
                     cmd.extend(self.traject_extra_config)
                 else:
-                    cmd.append(self.traject_extra_config)
+                    # Treat a string extra config as a path and pass it with -c
+                    cmd.extend(['-c', self.traject_extra_config])
             
             cmd.append(xml_file_path)
             
