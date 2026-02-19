@@ -527,12 +527,55 @@ class ArcFlow:
         indent = ' ' * indent_size
         self.log.info(f'{indent}Indexing pending resources in repository ID {repo_id} to ArcLight Solr...')
         try:
+
+            # Set traject config path
+
+            # Make sure we can find arclight path
+            result_show = subprocess.run(
+                ['bundle', 'show', 'arclight'],
+                capture_output=True,
+                text=True,
+                cwd=self.arclight_dir
+            )
+            arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
+
+            if not arclight_path:
+                self.log.error(f'{indent}Could not find arclight gem path')
+                return
+
+            traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
+
+            # Expand wildcards with glob to get files list
+            xml_files = glob.glob(xml_file_path)
+
+            if not xml_files:
+                self.log.warning(f'{indent}No files found matching pattern: {xml_file_path}')
+                return
+
+
+            cmd = [
+                'bundle', 'exec', 'traject',
+                '-u', self.solr_url,
+                '-s', 'processing_thread_pool=8',
+                '-s', 'solr_writer.thread_pool=8',
+                '-s', f'solr_writer.batch_size={self.batch_size}',
+                '-s', 'solr_writer.commit_on_close=true',
+                '-i', 'xml',
+                '-c', traject_config,
+                xml_files
+            ]
+
+            env = os.environ.copy()
+            env['REPOSITORY_ID'] = str(repo_id)
+
             result = subprocess.run(
-                f'REPOSITORY_ID={repo_id} bundle exec traject -u {self.solr_url} -s processing_thread_pool=8 -s solr_writer.thread_pool=8 -s solr_writer.batch_size={self.batch_size} -s solr_writer.commit_on_close=true -i xml -c $(bundle show arclight)/lib/arclight/traject/ead2_config.rb {xml_file_path}',
-#                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  TRAJECT_SETTINGS="processing_thread_pool=8 solr_writer.thread_pool=8 solr_writer.batch_size=1000 solr_writer.commit_on_close=false" bundle exec rake arcuit:index',
-                shell=True,
+                cmd,
                 cwd=self.arclight_dir,
-                stderr=subprocess.PIPE,)
+                env=env,
+                stderr=subprocess.PIPE,
+            )
+
+
             self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
             if result.returncode != 0:
                 self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
