@@ -39,10 +39,9 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, force_update=False):
         self.solr_url = solr_url
         self.batch_size = 1000
-        self.traject_extra_config = f'-c {traject_extra_config}' if traject_extra_config.strip() else ''
         self.arclight_dir = arclight_dir
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
@@ -529,7 +528,7 @@ class ArcFlow:
         self.log.info(f'{indent}Indexing pending resources in repository ID {repo_id} to ArcLight Solr...')
         try:
             result = subprocess.run(
-                f'REPOSITORY_ID={repo_id} bundle exec traject -u {self.solr_url} -s processing_thread_pool=8 -s solr_writer.thread_pool=8 -s solr_writer.batch_size={self.batch_size} -s solr_writer.commit_on_close=true -i xml -c $(bundle show arclight)/lib/arclight/traject/ead2_config.rb {self.traject_extra_config} {xml_file_path}',
+                f'REPOSITORY_ID={repo_id} bundle exec traject -u {self.solr_url} -s processing_thread_pool=8 -s solr_writer.thread_pool=8 -s solr_writer.batch_size={self.batch_size} -s solr_writer.commit_on_close=true -i xml -c $(bundle show arclight)/lib/arclight/traject/ead2_config.rb {xml_file_path}',
 #                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  TRAJECT_SETTINGS="processing_thread_pool=8 solr_writer.thread_pool=8 solr_writer.batch_size=1000 solr_writer.commit_on_close=false" bundle exec rake arcuit:index',
                 shell=True,
                 cwd=self.arclight_dir,
@@ -774,17 +773,12 @@ def main():
         '--solr-url',
         required=True,
         help='URL of the Solr core',)
-    parser.add_argument(
-        '--traject-extra-config',
-        default='',
-        help='Path to extra Traject configuration file',)
     args = parser.parse_args()
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
-        traject_extra_config=args.traject_extra_config,
         force_update=args.force_update)
     arcflow.run()
 
