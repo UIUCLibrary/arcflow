@@ -1041,21 +1041,19 @@ class ArcFlow:
             self.log.debug(f'  Error checking for arcuit gem: {e}')
         
         # Try 3: example file in arcflow package (fallback for module usage without arcuit)
+        # We know exactly where this file is located - at the repo root
         arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
         arcflow_repo_root = os.path.dirname(arcflow_package_dir)
-        candidate_paths = [
-            os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb'),
-            os.path.join(arcflow_package_dir, 'example_traject_config_eac_cpf.rb'),
-        ]
-        searched_paths.extend(candidate_paths)
-        for traject_config in candidate_paths:
-            if os.path.exists(traject_config):
-                self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
-                self.log.info(
-                    '  Note: Using example config. For production, copy this file to your '
-                    'arcuit gem or specify location with --arcuit-dir.'
-                )
-                return traject_config
+        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
+        searched_paths.append(traject_config)
+        
+        if os.path.exists(traject_config):
+            self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
+            self.log.info(
+                '  Note: Using example config. For production, copy this file to your '
+                'arcuit gem or specify location with --arcuit-dir.'
+            )
+            return traject_config
         
         # No config found anywhere - show all paths searched
         self.log.error('✗ Could not find traject_config_eac_cpf.rb in any of these locations:')
