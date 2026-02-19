@@ -10,6 +10,7 @@ import re
 import logging
 import math
 import sys
+import glob
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
 from xml.etree import ElementTree as ET
@@ -472,18 +473,17 @@ class ArcFlow:
 
             # Remove pending symlinks after indexing
             for repo_id, batch_num in batches:
-                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
-                try:
-                    result = subprocess.run(
-                        f'rm {xml_file_path}',
-                        shell=True,
-                        cwd=self.arclight_dir,
-                        stderr=subprocess.PIPE,)
-                    self.log.error(f'{" " * indent_size}{result.stderr.decode("utf-8")}')
-                    if result.returncode != 0:
-                        self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
-                except Exception as e:
-                    self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
+                xml_file_pattern = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                xml_files = glob.glob(xml_file_pattern)
+                
+                for xml_file_path in xml_files:
+                    try:
+                        os.remove(xml_file_path)
+                        self.log.info(f'{" " * indent_size}Removed pending symlink {xml_file_path}')
+                    except FileNotFoundError:
+                        self.log.warning(f'{" " * indent_size}File not found: {xml_file_path}')
+                    except Exception as e:
+                        self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
 
             # Tasks for processing PDFs
             results_4 = [pool.apply_async(
@@ -573,7 +573,15 @@ class ArcFlow:
                     # Treat a string extra config as a path and pass it with -c
                     cmd.extend(['-c', self.traject_extra_config])
             
-            cmd.append(xml_file_path)
+            # Expand wildcards with glob
+            xml_files = glob.glob(xml_file_path)
+            
+            if not xml_files:
+                self.log.warning(f'{indent}No files found matching pattern: {xml_file_path}')
+                return
+            
+            # Add all matching files to the command
+            cmd.extend(xml_files)
             
             env = os.environ.copy()
             env['REPOSITORY_ID'] = str(repo_id)
