@@ -1001,7 +1001,7 @@ class ArcFlow:
             self.log.debug(f'  Checking arcuit_dir parameter: {self.arcuit_dir}')
             candidate_paths = [
                 os.path.join(self.arcuit_dir, 'traject_config_eac_cpf.rb'),
-                os.path.join(self.arcuit_dir, 'arcflow', 'traject_config_eac_cpf.rb'),
+                os.path.join(self.arcuit_dir, 'lib', 'arcuit', 'traject', 'traject_config_eac_cpf.rb'),
             ]
             searched_paths.extend(candidate_paths)
             for traject_config in candidate_paths:
@@ -1024,7 +1024,7 @@ class ArcFlow:
                 self.log.debug(f'  Found arcuit gem at: {arcuit_path}')
                 candidate_paths = [
                     os.path.join(arcuit_path, 'traject_config_eac_cpf.rb'),
-                    os.path.join(arcuit_path, 'arcflow', 'traject_config_eac_cpf.rb'),
+                    os.path.join(arcuit_path, 'lib', 'arcuit', 'traject', 'traject_config_eac_cpf.rb'),
                 ]
                 searched_paths.extend(candidate_paths)
                 for traject_config in candidate_paths:
@@ -1033,7 +1033,7 @@ class ArcFlow:
                         return traject_config
                 self.log.debug(
                     '  traject_config_eac_cpf.rb not found in arcuit gem '
-                    '(checked root and arcflow/ subdirectory)'
+                    '(checked root and lib/arcuit/traject/ subdirectory)'
                 )
             else:
                 self.log.debug('  arcuit gem not found via bundle show')
