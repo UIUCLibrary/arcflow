@@ -1050,12 +1050,10 @@ class ArcFlow:
         searched_paths.extend(candidate_paths)
         for traject_config in candidate_paths:
             if os.path.exists(traject_config):
+                self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
                 self.log.info(
-                    f'✓ Using example traject config from arcflow: {traject_config}'
-                )
-                self.log.info(
-                    '  Note: Using example config. For production, copy this file to your arcuit gem '
-                    'or specify location with --arcuit-dir.'
+                    '  Note: Using example config. For production, copy this file to your '
+                    'arcuit gem or specify location with --arcuit-dir.'
                 )
                 return traject_config
         
