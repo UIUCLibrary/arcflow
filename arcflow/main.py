@@ -965,14 +965,15 @@ class ArcFlow:
             self.log.info(f'{indent}Indexing {len(creator_ids)} creator records to Solr...')
             traject_config = self.find_traject_config()
             if traject_config:
+                self.log.info(f'{indent}Using traject config: {traject_config}')
                 indexed = self.index_creators(agents_dir, creator_ids)
                 self.log.info(f'{indent}Creator indexing complete: {indexed}/{len(creator_ids)} indexed')
             else:
-                self.log.info(f'{indent}Skipping creator indexing (traject config not found)')
+                self.log.warning(f'{indent}Skipping creator indexing (traject config not found)')
                 self.log.info(f'{indent}To index manually:')
                 self.log.info(f'{indent}  cd {self.arclight_dir}')
                 self.log.info(f'{indent}  bundle exec traject -u {self.solr_url} -i xml \\')
-                self.log.info(f'{indent}    -c /path/to/arcuit/arcflow/traject_config_eac_cpf.rb \\')
+                self.log.info(f'{indent}    -c /path/to/arcuit-gem/traject_config_eac_cpf.rb \\')
                 self.log.info(f'{indent}    {agents_dir}/*.xml')
         elif self.skip_creator_indexing:
             self.log.info(f'{indent}Skipping creator indexing (--skip-creator-indexing flag set)')
@@ -984,15 +985,32 @@ class ArcFlow:
         """
         Find the traject config for creator indexing.
         
-        Tries:
-        1. bundle show arcuit (finds installed gem)
-        2. self.arcuit_dir (explicit path)
-        3. Returns None if neither works
+        Search order (follows collection records pattern):
+        1. arcuit_dir if provided (most up-to-date user control)
+        2. arcuit gem via bundle show (for backward compatibility)
+        3. example_traject_config_eac_cpf.rb in arcflow (fallback when used as module without arcuit)
         
         Returns:
             str: Path to traject config, or None if not found
         """
-        # Try bundle show arcuit first
+        self.log.info('Searching for traject_config_eac_cpf.rb...')
+        searched_paths = []
+        
+        # Try 1: arcuit_dir if provided (highest priority - user's explicit choice)
+        if self.arcuit_dir:
+            self.log.debug(f'  Checking arcuit_dir parameter: {self.arcuit_dir}')
+            candidate_paths = [
+                os.path.join(self.arcuit_dir, 'traject_config_eac_cpf.rb'),
+                os.path.join(self.arcuit_dir, 'lib', 'arcuit', 'traject', 'traject_config_eac_cpf.rb'),
+            ]
+            searched_paths.extend(candidate_paths)
+            for traject_config in candidate_paths:
+                if os.path.exists(traject_config):
+                    self.log.info(f'✓ Using traject config from arcuit_dir: {traject_config}')
+                    return traject_config
+            self.log.debug('  traject_config_eac_cpf.rb not found in arcuit_dir')
+        
+        # Try 2: bundle show arcuit (for backward compatibility when arcuit_dir not provided)
         try:
             result = subprocess.run(
                 ['bundle', 'show', 'arcuit'],
@@ -1003,39 +1021,46 @@ class ArcFlow:
             )
             if result.returncode == 0:
                 arcuit_path = result.stdout.strip()
-                # Prefer config at gem root, fall back to legacy subdirectory layout
+                self.log.debug(f'  Found arcuit gem at: {arcuit_path}')
                 candidate_paths = [
                     os.path.join(arcuit_path, 'traject_config_eac_cpf.rb'),
-                    os.path.join(arcuit_path, 'arcflow', 'traject_config_eac_cpf.rb'),
+                    os.path.join(arcuit_path, 'lib', 'arcuit', 'traject', 'traject_config_eac_cpf.rb'),
                 ]
+                searched_paths.extend(candidate_paths)
                 for traject_config in candidate_paths:
                     if os.path.exists(traject_config):
-                        self.log.info(f'Found traject config via bundle show: {traject_config}')
+                        self.log.info(f'✓ Using traject config from arcuit gem: {traject_config}')
                         return traject_config
-                self.log.warning(
-                    'bundle show arcuit succeeded but traject_config_eac_cpf.rb '
-                    'was not found in any expected location under the gem root'
+                self.log.debug(
+                    '  traject_config_eac_cpf.rb not found in arcuit gem '
+                    '(checked root and lib/arcuit/traject/ subdirectory)'
                 )
             else:
-                self.log.debug('bundle show arcuit failed (gem not installed?)')
+                self.log.debug('  arcuit gem not found via bundle show')
         except Exception as e:
-            self.log.debug(f'Error running bundle show arcuit: {e}')
-        # Fall back to arcuit_dir if provided
-        if self.arcuit_dir:
-            candidate_paths = [
-                os.path.join(self.arcuit_dir, 'traject_config_eac_cpf.rb'),
-                os.path.join(self.arcuit_dir, 'arcflow', 'traject_config_eac_cpf.rb'),
-            ]
-            for traject_config in candidate_paths:
-                if os.path.exists(traject_config):
-                    self.log.info(f'Using traject config from arcuit_dir: {traject_config}')
-                    return traject_config
-            self.log.warning(
-                'arcuit_dir provided but traject_config_eac_cpf.rb was not found '
-                'in any expected location'
+            self.log.debug(f'  Error checking for arcuit gem: {e}')
+        
+        # Try 3: example file in arcflow package (fallback for module usage without arcuit)
+        # We know exactly where this file is located - at the repo root
+        arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
+        arcflow_repo_root = os.path.dirname(arcflow_package_dir)
+        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
+        searched_paths.append(traject_config)
+        
+        if os.path.exists(traject_config):
+            self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
+            self.log.info(
+                '  Note: Using example config. For production, copy this file to your '
+                'arcuit gem or specify location with --arcuit-dir.'
             )
-        # No config found
-        self.log.warning('Could not find traject config (bundle show arcuit failed and arcuit_dir not provided or invalid)')
+            return traject_config
+        
+        # No config found anywhere - show all paths searched
+        self.log.error('✗ Could not find traject_config_eac_cpf.rb in any of these locations:')
+        for i, path in enumerate(searched_paths, 1):
+            self.log.error(f'  {i}. {path}')
+        self.log.error('')
+        self.log.error('  Add traject_config_eac_cpf.rb to your arcuit gem or specify with --arcuit-dir.')
         return None
 
 
