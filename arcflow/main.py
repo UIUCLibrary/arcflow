@@ -562,7 +562,7 @@ class ArcFlow:
                 '-s', 'solr_writer.commit_on_close=true',
                 '-i', 'xml',
                 '-c', traject_config,
-                xml_files
+                *xml_files
             ]
 
             env = os.environ.copy()
