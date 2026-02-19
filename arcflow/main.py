@@ -9,6 +9,7 @@ import subprocess
 import re
 import logging
 import math
+import glob
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
@@ -465,26 +466,19 @@ class ArcFlow:
             for r in results_3:
                 r.get()
 
-            # Remove pending symlinks after indexing
-            for repo_id, batch_num in batches:
-                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
-                try:
-                    result = subprocess.run(
-                        f'rm {xml_file_path}',
-                        shell=True,
-                        cwd=self.arclight_dir,
-                        stderr=subprocess.PIPE,)
-                    self.log.error(f'{" " * indent_size}{result.stderr.decode("utf-8")}')
-                    if result.returncode != 0:
-                        self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
-                except Exception as e:
-                    self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
+             # Remove pending symlinks after indexing
+             for repo_id, batch_num in batches:
+                 xml_file_pattern = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                 xml_files = glob.glob(xml_file_pattern)
 
-            # Tasks for processing PDFs
-            results_4 = [pool.apply_async(
-                self.task_pdf,
-                args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
-                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
+                 for xml_file_path in xml_files:
+                     try:
+                         os.remove(xml_file_path)
+                         self.log.info(f'{" " * indent_size}Removed pending symlink {xml_file_path}')
+                     except FileNotFoundError:
+                         self.log.warning(f'{" " * indent_size}File not found: {xml_file_path}')
+                     except Exception as e:
+                         self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
 
             # Wait for PDF tasks to complete
             for r in results_4:
