@@ -210,6 +210,9 @@ class ArcFlow:
                 'resolve': ['classifications', 'classification_terms', 'linked_agents'],
             }).json()
 
+        if "ead_id" not in resource:
+            self.log.error(f'{indent}Resource {resource_id} is missing an ead_id. Skipping.')
+            return pdf_job
         xml_file_path = f'{xml_dir}/{resource["ead_id"]}.xml'
 
         # replace dots with dashes in EAD ID to avoid issues with Solr
