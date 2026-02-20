@@ -415,7 +415,7 @@ class ArcFlow:
                     json={'delete': {'query': '*:*'}},
                 )
                 if response.status_code == 200:
-                    self.log.info('Deleted all EADs from ArcLight Solr.')
+                    self.log.info('Deleted all EADs and Creators from ArcLight Solr.')
                     # delete related directories after suscessful
                     # deletion from solr
                     for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
@@ -427,7 +427,7 @@ class ArcFlow:
                 else:
                     self.log.error(f'Failed to delete all EADs from Arclight Solr. Status code: {response.status_code}')
             except requests.exceptions.RequestException as e:
-                self.log.error(f'Error deleting all EADs from ArcLight Solr: {e}')
+                self.log.error(f'Error deleting all EADs and Creators from ArcLight Solr: {e}')
 
         # create directories if don't exist
         for dir_path in (xml_dir, pdf_dir):
@@ -757,7 +757,7 @@ class ArcFlow:
             try:
                 # Try with modified_since parameter first
                 params = {'all_ids': True}
-                if modified_since > 0:
+                if modified_since > 0 and not self.force_update:
                     params['modified_since'] = modified_since
                 
                 response = self.client.get(f'/agents/{agent_type}', params=params)
