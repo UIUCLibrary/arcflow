@@ -402,6 +402,7 @@ class ArcFlow:
         ArchivesSpace.
         """
         xml_dir = f'{self.arclight_dir}/public/xml'
+        resource_dir = f'{xml_dir}/resources'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
         modified_since = int(self.last_updated.timestamp())
@@ -430,7 +431,7 @@ class ArcFlow:
                 self.log.error(f'Error deleting all EADs and Creators from ArcLight Solr: {e}')
 
         # create directories if don't exist
-        for dir_path in (xml_dir, pdf_dir):
+        for dir_path in (resource_dir, pdf_dir):
             os.makedirs(dir_path, exist_ok=True)
 
         # process resources that have been modified in ArchivesSpace since last update
@@ -443,7 +444,7 @@ class ArcFlow:
             # Tasks for processing repositories
             results_1 = [pool.apply_async(
                 self.task_repository, 
-                args=(repo, xml_dir, modified_since, indent_size)) 
+                args=(repo, resource_dir, modified_since, indent_size))
                 for repo in repos]
             # Collect outputs from repository tasks
             outputs_1 = [r.get() for r in results_1]
@@ -451,7 +452,7 @@ class ArcFlow:
             # Tasks for processing resources
             results_2 = [pool.apply_async(
                 self.task_resource, 
-                args=(repo, resource_id, xml_dir, pdf_dir, indent_size)) 
+                args=(repo, resource_id, resource_dir, pdf_dir, indent_size))
                 for repo, resources in outputs_1 for resource_id in resources]
             # Collect outputs from resource tasks
             outputs_2 = [r.get() for r in results_2]
@@ -466,7 +467,7 @@ class ArcFlow:
             # Tasks for indexing pending resources
             results_3 = [pool.apply_async(
                 self.index_collections,
-                args=(repo_id, f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
+                args=(repo_id, f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
                 for repo_id, batch_num in batches]
 
             # Wait for indexing tasks to complete
@@ -475,7 +476,7 @@ class ArcFlow:
 
             # Remove pending symlinks after indexing
             for repo_id, batch_num in batches:
-                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                xml_file_path = f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml'
                 try:
                     result = subprocess.run(
                         f'rm {xml_file_path}',
@@ -498,14 +499,23 @@ class ArcFlow:
             for r in results_4:
                 r.get()
 
-        # processing deleted resources is not needed when 
-        # force-update is set or modified_since is set to 0
-        if self.force_update or modified_since <= 0:
-            self.log.info('Skipping deleted resources processing.')
-            return
+        return
 
-        # process resources that have been deleted since last update in ArchivesSpace
-        pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<resource_id>\d+)$'
+
+
+    def process_deleted_records(self):
+
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        resource_dir = f'{xml_dir}/resources'
+        agent_dir = f'{xml_dir}/agents'
+        pdf_dir = f'{self.arclight_dir}/public/pdf'
+        modified_since = int(self.last_updated.timestamp())
+
+        # process records that have been deleted since last update in ArchivesSpace
+        resource_pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<record_id>\d+)$'
+        agent_pattern = r'^/agents/(?P<agent_type>people|corporate_entities|families)/(?P<record_id>\d+)$'
+
+
         page = 1
         while True:
             deleted_records = self.client.get(
@@ -516,12 +526,13 @@ class ArcFlow:
                 }
             ).json()
             for record in deleted_records['results']:
-                match = re.match(pattern, record)
-                if match:
+                resource_match = re.match(resource_pattern, record)
+                agent_match = re.match(agent_pattern, record)
+                if resource_match and not self.agents_only:
                     resource_id = match.group('resource_id')
                     self.log.info(f'{" " * indent_size}Processing deleted resource ID {resource_id}...')
 
-                    symlink_path = f'{xml_dir}/{resource_id}.xml'
+                    symlink_path = f'{resource_dir}/{resource_id}.xml'
                     ead_id = self.get_ead_from_symlink(symlink_path)
                     if ead_id:
                         self.delete_ead(
@@ -532,6 +543,10 @@ class ArcFlow:
                             indent=4)
                     else:
                         self.log.error(f'{" " * (indent_size+2)}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
+
+                if agent_match and not self.collections_only:
+                    #TODO: delete agent records. If these can be done in idential ways
+                    self.log.info('there was an agent record to delete')
 
             if deleted_records['last_page'] == page:
                 break
@@ -1282,6 +1297,13 @@ class ArcFlow:
         # Update creator records (unless collections-only mode)
         if not self.collections_only:
             self.process_creators()
+
+        # processing deleted resources is not needed when
+        # force-update is set or modified_since is set to 0
+        if self.force_update or int(self.last_updated.timestamp()) <= 0:
+            self.log.info('Skipping deleted record processing.')
+        else:
+            self.process_deleted_records()
         
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
