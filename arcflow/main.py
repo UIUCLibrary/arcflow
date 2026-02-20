@@ -347,19 +347,69 @@ class ArcFlow:
         return (repo, resources)
 
 
-    def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir, indent_size=0):
+    def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir, indent_size=0, timeout=300):
+        """
+        Wait for an ArchivesSpace PDF generation job to complete and save the result.
+        
+        Args:
+            repo_uri: Repository URI
+            job_id: Job ID in ArchivesSpace
+            ead_id: EAD identifier for the resource
+            pdf_dir: Directory to save PDF files
+            indent_size: Indentation level for logging
+            timeout: Maximum seconds to wait for job completion (default: 300 = 5 minutes)
+            
+        Returns:
+            True if successful, False if timeout or job failed
+        """
         indent = ' ' * indent_size
+        start_time = time.time()
+        poll_interval = 5  # seconds between status checks
+        warning_threshold = 60  # warn if queued for more than 1 minute
+        last_warning_time = 0
+        poll_count = 0
+        
         while True:
-            job_status = self.client.get(
-                f'{repo_uri}/jobs/{job_id}').json()['status']
+            elapsed_time = time.time() - start_time
+            
+            # Check for timeout
+            if elapsed_time > timeout:
+                self.log.error(
+                    f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
+                    f'after {int(elapsed_time)} seconds. Job may be stuck in queued status.\n'
+                    f'{indent}TROUBLESHOOTING: Check if ArchivesSpace background job processor is running:\n'
+                    f'{indent}  - Run: ps aux | grep archivesspace | grep background\n'
+                    f'{indent}  - Start it: ./archivesspace.sh start-background-job-runner\n'
+                    f'{indent}  - Check ArchivesSpace logs for errors\n'
+                    f'{indent}Continuing without PDF for "{ead_id}"...'
+                )
+                # Create empty PDF file and continue
+                self.save_file(
+                    f'{pdf_dir}/{ead_id}.pdf',
+                    b'',
+                    'PDF (empty - job timed out)',
+                    indent_size=indent_size)
+                return False
+            
+            try:
+                job_status = self.client.get(
+                    f'{repo_uri}/jobs/{job_id}').json()['status']
+            except Exception as e:
+                self.log.error(f'{indent}Error checking job status for {self.job_type}_{job_id}: {e}')
+                time.sleep(poll_interval)
+                continue
 
             if job_status in ('completed', 'canceled', 'failed'):
                 if job_status == 'completed':
-                    file_id = self.client.get(
-                        f'{repo_uri}/jobs/{job_id}/output_files').json()[0]
+                    try:
+                        file_id = self.client.get(
+                            f'{repo_uri}/jobs/{job_id}/output_files').json()[0]
 
-                    pdf = self.client.get(
-                        f'{repo_uri}/jobs/{job_id}/output_files/{file_id}')
+                        pdf = self.client.get(
+                            f'{repo_uri}/jobs/{job_id}/output_files/{file_id}')
+                    except Exception as e:
+                        self.log.error(f'{indent}Error retrieving PDF output for {self.job_type}_{job_id}: {e}')
+                        pdf = None
                 elif job_status in ('canceled', 'failed'):
                     self.log.error(f'{indent}ArchivesSpace {self.job_type}_{job_id} {job_status}.')
                     pdf = None
@@ -387,11 +437,34 @@ class ArcFlow:
                     'PDF', 
                     indent_size=indent_size)
 
-                self.log.info(f'Finished processing "{ead_id}".')
+                self.log.info(f'{indent}Finished processing "{ead_id}" (status: {job_status}).')
                 return True
 
-            self.log.info(f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} to complete... (current status: {job_status})')
-            time.sleep(5)
+            # Enhanced logging for queued jobs
+            poll_count += 1
+            if job_status == 'queued':
+                # Show warning if job has been queued for too long
+                if elapsed_time > warning_threshold and (elapsed_time - last_warning_time) > warning_threshold:
+                    self.log.warning(
+                        f'{indent}Job {self.job_type}_{job_id} has been queued for {int(elapsed_time)} seconds. '
+                        f'This may indicate the ArchivesSpace background job processor is not running.'
+                    )
+                    last_warning_time = elapsed_time
+                
+                # Only log every 4th poll (every 20 seconds) to reduce log spam
+                if poll_count % 4 == 0:
+                    self.log.info(
+                        f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'(status: {job_status}, elapsed: {int(elapsed_time)}s, timeout in: {int(timeout - elapsed_time)}s)'
+                    )
+            else:
+                # For non-queued statuses (running, etc.), log every time
+                self.log.info(
+                    f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} '
+                    f'(status: {job_status}, elapsed: {int(elapsed_time)}s)'
+                )
+            
+            time.sleep(poll_interval)
 
 
     def update_eads(self):
