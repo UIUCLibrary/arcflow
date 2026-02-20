@@ -41,7 +41,7 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False, pdf_timeout_queued=300, pdf_timeout_running=1800):
         self.solr_url = solr_url
         self.batch_size = 1000
         clean_extra_config = traject_extra_config.strip()
@@ -54,6 +54,8 @@ class ArcFlow:
         self.collections_only = collections_only
         self.arcuit_dir = arcuit_dir
         self.skip_creator_indexing = skip_creator_indexing
+        self.pdf_timeout_queued = pdf_timeout_queued  # Timeout for jobs stuck in "queued" status
+        self.pdf_timeout_running = pdf_timeout_running  # Timeout for jobs actively "running"
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -347,9 +349,13 @@ class ArcFlow:
         return (repo, resources)
 
 
-    def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir, indent_size=0, timeout=300):
+    def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir, indent_size=0):
         """
         Wait for an ArchivesSpace PDF generation job to complete and save the result.
+        
+        Uses a two-phase timeout approach:
+        - Phase 1 (queued): Short timeout to detect if background processor isn't running
+        - Phase 2 (running): Longer timeout to allow large PDFs to complete
         
         Args:
             repo_uri: Repository URI
@@ -357,7 +363,6 @@ class ArcFlow:
             ead_id: EAD identifier for the resource
             pdf_dir: Directory to save PDF files
             indent_size: Indentation level for logging
-            timeout: Maximum seconds to wait for job completion (default: 300 = 5 minutes)
             
         Returns:
             True if successful, False if timeout or job failed
@@ -369,21 +374,38 @@ class ArcFlow:
         last_warning_time = 0
         poll_count = 0
         
+        # Track status transitions for smart timeout
+        status_start_times = {}  # Track when each status began
+        current_timeout = self.pdf_timeout_queued  # Start with queued timeout
+        
         while True:
             elapsed_time = time.time() - start_time
             
-            # Check for timeout
-            if elapsed_time > timeout:
-                self.log.error(
-                    f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
-                    f'after {int(elapsed_time)} seconds. Job may be stuck in queued status.\n'
-                    f'{indent}TROUBLESHOOTING: Background job processing may not be enabled in ArchivesSpace:\n'
-                    f'{indent}  1. Check config/config.rb: AppConfig[:job_thread_count] must be > 0 (default is 2)\n'
-                    f'{indent}  2. If you changed the config, restart ArchivesSpace: ./archivesspace.sh restart\n'
-                    f'{indent}  3. Verify ArchivesSpace is processing jobs in the web UI: System → Background Jobs\n'
-                    f'{indent}  4. Check ArchivesSpace logs for errors: logs/archivesspace.out\n'
-                    f'{indent}Continuing without PDF for "{ead_id}"...'
-                )
+            # Check for timeout (with appropriate timeout for current status)
+            if elapsed_time > current_timeout:
+                # Determine which phase timed out for appropriate error message
+                last_status = list(status_start_times.keys())[-1] if status_start_times else 'queued'
+                
+                if last_status == 'queued':
+                    self.log.error(
+                        f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'after {int(elapsed_time)} seconds. Job stuck in queued status.\n'
+                        f'{indent}TROUBLESHOOTING: Background job processing may not be enabled in ArchivesSpace:\n'
+                        f'{indent}  1. Check config/config.rb: AppConfig[:job_thread_count] must be > 0 (default is 2)\n'
+                        f'{indent}  2. If you changed the config, restart ArchivesSpace: ./archivesspace.sh restart\n'
+                        f'{indent}  3. Verify ArchivesSpace is processing jobs in the web UI: System → Background Jobs\n'
+                        f'{indent}  4. Check ArchivesSpace logs for errors: logs/archivesspace.out\n'
+                        f'{indent}Continuing without PDF for "{ead_id}"...'
+                    )
+                else:
+                    self.log.error(
+                        f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'after {int(elapsed_time)} seconds in "{last_status}" status.\n'
+                        f'{indent}This may be a very large PDF taking longer than expected.\n'
+                        f'{indent}Consider increasing timeout with: --pdf-timeout-running {int(current_timeout * 2)}\n'
+                        f'{indent}Continuing without PDF for "{ead_id}"...'
+                    )
+                
                 # Create empty PDF file and continue
                 self.save_file(
                     f'{pdf_dir}/{ead_id}.pdf',
@@ -399,6 +421,22 @@ class ArcFlow:
                 self.log.error(f'{indent}Error checking job status for {self.job_type}_{job_id}: {e}')
                 time.sleep(poll_interval)
                 continue
+            
+            # Track status transitions and adjust timeout accordingly
+            if job_status not in status_start_times:
+                status_start_times[job_status] = time.time()
+                
+                # When job transitions from queued to running, switch to running timeout
+                if job_status == 'running' and 'queued' in status_start_times:
+                    time_in_queued = status_start_times[job_status] - status_start_times['queued']
+                    # Reset timeout clock for running phase
+                    start_time = time.time()
+                    current_timeout = self.pdf_timeout_running
+                    self.log.info(
+                        f'{indent}Job {self.job_type}_{job_id} transitioned to "running" '
+                        f'after {int(time_in_queued)}s in queue. '
+                        f'Now allowing up to {int(self.pdf_timeout_running)}s for PDF generation...'
+                    )
 
             if job_status in ('completed', 'canceled', 'failed'):
                 if job_status == 'completed':
@@ -456,7 +494,7 @@ class ArcFlow:
                 if poll_count % 4 == 0:
                     self.log.info(
                         f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} '
-                        f'(status: {job_status}, elapsed: {int(elapsed_time)}s, timeout in: {int(timeout - elapsed_time)}s)'
+                        f'(status: {job_status}, elapsed: {int(elapsed_time)}s, timeout in: {int(current_timeout - elapsed_time)}s)'
                     )
             else:
                 # For non-queued statuses (running, etc.), log every time
@@ -1405,6 +1443,16 @@ def main():
         '--skip-creator-indexing',
         action='store_true',
         help='Generate creator XML files but skip Solr indexing (for testing)',)
+    parser.add_argument(
+        '--pdf-timeout-queued',
+        type=int,
+        default=300,
+        help='Timeout in seconds for PDF jobs stuck in "queued" status (default: 300 = 5 minutes)',)
+    parser.add_argument(
+        '--pdf-timeout-running',
+        type=int,
+        default=1800,
+        help='Timeout in seconds for PDF jobs in "running" status (default: 1800 = 30 minutes)',)
     args = parser.parse_args()
     
     # Validate mutually exclusive flags
@@ -1420,7 +1468,9 @@ def main():
         agents_only=args.agents_only,
         collections_only=args.collections_only,
         arcuit_dir=args.arcuit_dir,
-        skip_creator_indexing=args.skip_creator_indexing)
+        skip_creator_indexing=args.skip_creator_indexing,
+        pdf_timeout_queued=args.pdf_timeout_queued,
+        pdf_timeout_running=args.pdf_timeout_running)
     arcflow.run()
 
 
