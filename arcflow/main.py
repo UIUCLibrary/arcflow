@@ -15,7 +15,7 @@ from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
-from utils.stage_classifications import extract_labels
+from .utils.stage_classifications import extract_labels
 
 
 base_dir = os.path.abspath((__file__) + "/../../")
@@ -466,18 +466,18 @@ class ArcFlow:
                 r.get()
 
              # Remove pending symlinks after indexing
-             for repo_id, batch_num in batches:
-                 xml_file_pattern = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
-                 xml_files = glob.glob(xml_file_pattern)
+                for repo_id, batch_num in batches:
+                    xml_file_pattern = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                    xml_files = glob.glob(xml_file_pattern)
 
-                 for xml_file_path in xml_files:
-                     try:
-                         os.remove(xml_file_path)
-                         self.log.info(f'{" " * indent_size}Removed pending symlink {xml_file_path}')
-                     except FileNotFoundError:
-                         self.log.warning(f'{" " * indent_size}File not found: {xml_file_path}')
-                     except Exception as e:
-                         self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
+                    for xml_file_path in xml_files:
+                        try:
+                            os.remove(xml_file_path)
+                            self.log.info(f'{" " * indent_size}Removed pending symlink {xml_file_path}')
+                        except FileNotFoundError:
+                            self.log.warning(f'{" " * indent_size}File not found: {xml_file_path}')
+                        except Exception as e:
+                            self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
 
             # Wait for PDF tasks to complete
             for r in results_4:
