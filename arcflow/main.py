@@ -10,6 +10,7 @@ import re
 import logging
 import math
 import sys
+import glob
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
 from xml.etree import ElementTree as ET
@@ -40,7 +41,7 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False, pdf_timeout_queued=300, pdf_timeout_running=1800):
         self.solr_url = solr_url
         self.batch_size = 1000
         clean_extra_config = traject_extra_config.strip()
@@ -53,6 +54,8 @@ class ArcFlow:
         self.collections_only = collections_only
         self.arcuit_dir = arcuit_dir
         self.skip_creator_indexing = skip_creator_indexing
+        self.pdf_timeout_queued = pdf_timeout_queued  # Timeout for jobs stuck in "queued" status
+        self.pdf_timeout_running = pdf_timeout_running  # Timeout for jobs actively "running"
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -350,18 +353,105 @@ class ArcFlow:
 
 
     def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir, indent_size=0):
+        """
+        Wait for an ArchivesSpace PDF generation job to complete and save the result.
+        
+        Uses a two-phase timeout approach:
+        - Phase 1 (queued): Short timeout to detect if background processor isn't running
+        - Phase 2 (running): Longer timeout to allow large PDFs to complete
+        
+        Args:
+            repo_uri: Repository URI
+            job_id: Job ID in ArchivesSpace
+            ead_id: EAD identifier for the resource
+            pdf_dir: Directory to save PDF files
+            indent_size: Indentation level for logging
+            
+        Returns:
+            True if successful, False if timeout or job failed
+        """
         indent = ' ' * indent_size
+        start_time = time.time()
+        poll_interval = 5  # seconds between status checks
+        warning_threshold = 60  # warn if queued for more than 1 minute
+        last_warning_time = 0
+        poll_count = 0
+        
+        # Track status transitions for smart timeout
+        status_start_times = {}  # Track when each status began
+        current_timeout = self.pdf_timeout_queued  # Start with queued timeout
+        
         while True:
-            job_status = self.client.get(
-                f'{repo_uri}/jobs/{job_id}').json()['status']
+            elapsed_time = time.time() - start_time
+            
+            # Check for timeout (with appropriate timeout for current status)
+            if elapsed_time > current_timeout:
+                # Determine which phase timed out for appropriate error message
+                last_status = list(status_start_times.keys())[-1] if status_start_times else 'queued'
+                
+                if last_status == 'queued':
+                    self.log.error(
+                        f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'after {int(elapsed_time)} seconds. Job stuck in queued status.\n'
+                        f'{indent}TROUBLESHOOTING: Background job processing may not be enabled in ArchivesSpace:\n'
+                        f'{indent}  1. Check config/config.rb: AppConfig[:job_thread_count] must be > 0 (default is 2)\n'
+                        f'{indent}  2. If you changed the config, restart ArchivesSpace: ./archivesspace.sh restart\n'
+                        f'{indent}  3. Verify ArchivesSpace is processing jobs in the web UI: System → Background Jobs\n'
+                        f'{indent}  4. Check ArchivesSpace logs for errors: logs/archivesspace.out\n'
+                        f'{indent}Continuing without PDF for "{ead_id}"...'
+                    )
+                else:
+                    self.log.error(
+                        f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'after {int(elapsed_time)} seconds in "{last_status}" status.\n'
+                        f'{indent}This may be a very large PDF taking longer than expected.\n'
+                        f'{indent}Consider increasing timeout with: --pdf-timeout-running {int(current_timeout * 2)}\n'
+                        f'{indent}Continuing without PDF for "{ead_id}"...'
+                    )
+                
+                # Create empty PDF file and continue
+                self.save_file(
+                    f'{pdf_dir}/{ead_id}.pdf',
+                    b'',
+                    'PDF (empty - job timed out)',
+                    indent_size=indent_size)
+                return False
+            
+            try:
+                job_status = self.client.get(
+                    f'{repo_uri}/jobs/{job_id}').json()['status']
+            except Exception as e:
+                self.log.error(f'{indent}Error checking job status for {self.job_type}_{job_id}: {e}')
+                time.sleep(poll_interval)
+                continue
+            
+            # Track status transitions and adjust timeout accordingly
+            if job_status not in status_start_times:
+                status_start_times[job_status] = time.time()
+                
+                # When job transitions from queued to running, switch to running timeout
+                if job_status == 'running' and 'queued' in status_start_times:
+                    time_in_queued = status_start_times[job_status] - status_start_times['queued']
+                    # Reset timeout clock for running phase
+                    start_time = time.time()
+                    current_timeout = self.pdf_timeout_running
+                    self.log.info(
+                        f'{indent}Job {self.job_type}_{job_id} transitioned to "running" '
+                        f'after {int(time_in_queued)}s in queue. '
+                        f'Now allowing up to {int(self.pdf_timeout_running)}s for PDF generation...'
+                    )
 
             if job_status in ('completed', 'canceled', 'failed'):
                 if job_status == 'completed':
-                    file_id = self.client.get(
-                        f'{repo_uri}/jobs/{job_id}/output_files').json()[0]
+                    try:
+                        file_id = self.client.get(
+                            f'{repo_uri}/jobs/{job_id}/output_files').json()[0]
 
-                    pdf = self.client.get(
-                        f'{repo_uri}/jobs/{job_id}/output_files/{file_id}')
+                        pdf = self.client.get(
+                            f'{repo_uri}/jobs/{job_id}/output_files/{file_id}')
+                    except Exception as e:
+                        self.log.error(f'{indent}Error retrieving PDF output for {self.job_type}_{job_id}: {e}')
+                        pdf = None
                 elif job_status in ('canceled', 'failed'):
                     self.log.error(f'{indent}ArchivesSpace {self.job_type}_{job_id} {job_status}.')
                     pdf = None
@@ -389,11 +479,34 @@ class ArcFlow:
                     'PDF', 
                     indent_size=indent_size)
 
-                self.log.info(f'Finished processing "{ead_id}".')
+                self.log.info(f'{indent}Finished processing "{ead_id}" (status: {job_status}).')
                 return True
 
-            self.log.info(f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} to complete... (current status: {job_status})')
-            time.sleep(5)
+            # Enhanced logging for queued jobs
+            poll_count += 1
+            if job_status == 'queued':
+                # Show warning if job has been queued for too long
+                if elapsed_time > warning_threshold and (elapsed_time - last_warning_time) > warning_threshold:
+                    self.log.warning(
+                        f'{indent}Job {self.job_type}_{job_id} has been queued for {int(elapsed_time)} seconds. '
+                        f'This may indicate the ArchivesSpace background job processor is not running.'
+                    )
+                    last_warning_time = elapsed_time
+                
+                # Only log every 4th poll (every 20 seconds) to reduce log spam
+                if poll_count % 4 == 0:
+                    self.log.info(
+                        f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'(status: {job_status}, elapsed: {int(elapsed_time)}s, timeout in: {int(current_timeout - elapsed_time)}s)'
+                    )
+            else:
+                # For non-queued statuses (running, etc.), log every time
+                self.log.info(
+                    f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} '
+                    f'(status: {job_status}, elapsed: {int(elapsed_time)}s)'
+                )
+            
+            time.sleep(poll_interval)
 
 
     def update_eads(self):
@@ -475,18 +588,17 @@ class ArcFlow:
 
             # Remove pending symlinks after indexing
             for repo_id, batch_num in batches:
-                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
-                try:
-                    result = subprocess.run(
-                        f'rm {xml_file_path}',
-                        shell=True,
-                        cwd=self.arclight_dir,
-                        stderr=subprocess.PIPE,)
-                    self.log.error(f'{" " * indent_size}{result.stderr.decode("utf-8")}')
-                    if result.returncode != 0:
-                        self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
-                except Exception as e:
-                    self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
+                xml_file_pattern = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                xml_files = glob.glob(xml_file_pattern)
+                
+                for xml_file_path in xml_files:
+                    try:
+                        os.remove(xml_file_path)
+                        self.log.info(f'{" " * indent_size}Removed pending symlink {xml_file_path}')
+                    except FileNotFoundError:
+                        self.log.warning(f'{" " * indent_size}File not found: {xml_file_path}')
+                    except Exception as e:
+                        self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
 
             # Tasks for processing PDFs
             results_4 = [pool.apply_async(
@@ -576,7 +688,15 @@ class ArcFlow:
                     # Treat a string extra config as a path and pass it with -c
                     cmd.extend(['-c', self.traject_extra_config])
             
-            cmd.append(xml_file_path)
+            # Expand wildcards with glob
+            xml_files = glob.glob(xml_file_path)
+            
+            if not xml_files:
+                self.log.warning(f'{indent}No files found matching pattern: {xml_file_path}')
+                return
+            
+            # Add all matching files to the command
+            cmd.extend(xml_files)
             
             env = os.environ.copy()
             env['REPOSITORY_ID'] = str(repo_id)
@@ -1327,6 +1447,16 @@ def main():
         '--skip-creator-indexing',
         action='store_true',
         help='Generate creator XML files but skip Solr indexing (for testing)',)
+    parser.add_argument(
+        '--pdf-timeout-queued',
+        type=int,
+        default=300,
+        help='Timeout in seconds for PDF jobs stuck in "queued" status (default: 300 = 5 minutes)',)
+    parser.add_argument(
+        '--pdf-timeout-running',
+        type=int,
+        default=1800,
+        help='Timeout in seconds for PDF jobs in "running" status (default: 1800 = 30 minutes)',)
     args = parser.parse_args()
     
     # Validate mutually exclusive flags
@@ -1342,7 +1472,9 @@ def main():
         agents_only=args.agents_only,
         collections_only=args.collections_only,
         arcuit_dir=args.arcuit_dir,
-        skip_creator_indexing=args.skip_creator_indexing)
+        skip_creator_indexing=args.skip_creator_indexing,
+        pdf_timeout_queued=args.pdf_timeout_queued,
+        pdf_timeout_running=args.pdf_timeout_running)
     arcflow.run()
 
 
