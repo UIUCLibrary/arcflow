@@ -377,10 +377,11 @@ class ArcFlow:
                 self.log.error(
                     f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
                     f'after {int(elapsed_time)} seconds. Job may be stuck in queued status.\n'
-                    f'{indent}TROUBLESHOOTING: Check if ArchivesSpace background job processor is running:\n'
-                    f'{indent}  - Run: ps aux | grep archivesspace | grep background\n'
-                    f'{indent}  - Start it: ./archivesspace.sh start-background-job-runner\n'
-                    f'{indent}  - Check ArchivesSpace logs for errors\n'
+                    f'{indent}TROUBLESHOOTING: Background job processing may not be enabled in ArchivesSpace:\n'
+                    f'{indent}  1. Check config/config.rb: AppConfig[:job_thread_count] must be > 0 (default is 2)\n'
+                    f'{indent}  2. If you changed the config, restart ArchivesSpace: ./archivesspace.sh restart\n'
+                    f'{indent}  3. Verify ArchivesSpace is processing jobs in the web UI: System → Background Jobs\n'
+                    f'{indent}  4. Check ArchivesSpace logs for errors: logs/archivesspace.out\n'
                     f'{indent}Continuing without PDF for "{ead_id}"...'
                 )
                 # Create empty PDF file and continue
