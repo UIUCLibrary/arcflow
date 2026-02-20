@@ -465,7 +465,7 @@ class ArcFlow:
             for r in results_3:
                 r.get()
 
-             # Remove pending symlinks after indexing
+            # Remove pending symlinks after indexing
                 for repo_id, batch_num in batches:
                     xml_file_pattern = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
                     xml_files = glob.glob(xml_file_pattern)
@@ -478,6 +478,12 @@ class ArcFlow:
                             self.log.warning(f'{" " * indent_size}File not found: {xml_file_path}')
                         except Exception as e:
                             self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
+
+            # Tasks for processing PDFs
+            results_4 = [pool.apply_async(
+                self.task_pdf,
+                args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
+                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
 
             # Wait for PDF tasks to complete
             for r in results_4:
