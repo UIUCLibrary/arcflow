@@ -545,8 +545,12 @@ class ArcFlow:
                         self.log.error(f'{" " * (indent_size+2)}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
 
                 if agent_match and not self.collections_only:
-                    #TODO: delete agent records. If these can be done in idential ways
-                    self.log.info('there was an agent record to delete')
+                    agent_id = match.group('agent_id')
+                    self.log.info(f'{" " * indent_size}Processing deleted agent ID {agent_id}...')
+                    file_path = f'{agent_dir}/{agent_id}.xml'
+                    agent_solr_id = f'creator_{agent_type}_{agent_id}'
+                    self.delete_creator(file_path, agent_solr_id, indent_size)
+
 
             if deleted_records['last_page'] == page:
                 break
@@ -1233,37 +1237,47 @@ class ArcFlow:
             self.log.info(f'{indent}{e}')
             return False
 
+    def delete_arclight_solr_record(self, solr_record_id, indent_size=0):
+        try:
+            response = request.post(
+                f'{self.solr_url}/update?commit=true',
+                json={'delete': {'id': solr_record_id}},
+            )
+            if response.status_code == 200:
+                self.log.info(f'{indent}Deleted Solr record {solr_record_id}. from ArcLight Solr')
+                return True
+            else:
+                self.log.error(
+                    f'{indent}Failed to Solr record {solr_record_id} from Arclight Solr. Status code: {response.status_code}')
+                return False
+        except requests.exceptions.RequestException as e:
+            self.log.error(f'{indent}Error deleting Solr record {solr_record_id} from ArcLight Solr: {e}')
+
+    def delete_file(self, file_path, indent=0):
+        try:
+            os.remove(file_path)
+            self.log.info(f'{indent}Deleted file {file_path}.')
+        except FileNotFoundError:
+            self.log.error(f'{indent}File {file_path} not found.')
 
     def delete_ead(self, resource_id, ead_id, 
             xml_file_path, pdf_file_path, indent_size=0):
         indent = ' ' * indent_size
         # delete from solr
-        try:
-            response = requests.post(
-                f'{self.solr_url}/update?commit=true',
-                json={'delete': {'id': ead_id}},
-            )
-            if response.status_code == 200:
-                self.log.info(f'{indent}Deleted EAD "{ead_id}" from ArcLight Solr.')
-                # delete related files after suscessful deletion from solr
-                for file_path in (xml_file_path, pdf_file_path):
-                    try:
-                        os.remove(file_path)
-                        self.log.info(f'{indent}Deleted file {file_path}.')
-                    except FileNotFoundError:
-                        self.log.error(f'{indent}File {file_path} not found.')
+        deleted_solr_record = self.delete_arclight_solr_record(ead_id, indent_size=indent_size)
+        if deleted_solr_record:
+            self.delete_file(pdf_file_path, indent=indent)
+            self.delete_file(xml_file_path, indent=indent)
+            # delete symlink if exists
+            symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
+            self.delete_file(symlink_path, indent=indent)
 
-                # delete symlink if exists
-                symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
-                try:
-                    os.remove(symlink_path)
-                    self.log.info(f'{indent}Deleted symlink {symlink_path}.')
-                except FileNotFoundError:
-                    self.log.info(f'{indent}Symlink {symlink_path} not found.')
-            else:
-                self.log.error(f'{indent}Failed to delete EAD "{ead_id}" from Arclight Solr. Status code: {response.status_code}')
-        except requests.exceptions.RequestException as e:
-            self.log.error(f'{indent}Error deleting EAD "{ead_id}" from ArcLight Solr: {e}')
+    def delete_creator(self, file_path, solr_id, indent_size=0):
+        indent = ' ' * indent_size
+        deleted_solr_record = self.delete_arclight_solr_record(solr_id, indent_size=indent_size)
+        if deleted_solr_record:
+            self.delete_file(file_path, indent=indent)
+
 
 
     def save_config_file(self):
