@@ -16,7 +16,7 @@ from xml.etree import ElementTree as ET
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
-from .utils.stage_classifications import extract_labels
+from utils.stage_classifications import extract_labels
 
 
 base_dir = os.path.abspath((__file__) + "/../../")
@@ -40,8 +40,9 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
         self.solr_url = solr_url
+        self.aspace_solr_url = aspace_solr_url
         self.batch_size = 1000
         clean_extra_config = traject_extra_config.strip()
         self.traject_extra_config = clean_extra_config or None
@@ -696,184 +697,142 @@ class ArcFlow:
             return '\n'.join(bioghist_elements)
         return None
 
+    def _get_target_agent_criteria(self, modified_since=0):
+        """
+        Defines the Solr query criteria for "target" agents.
+        These are agents we want to process.
+        """
+        # Basic filters for agents to include
+        criteria = [
+            "system_generated:false",
+            "is_user:false",
+            "is_repo_agent:false",
+            # Include agents that are creators OR are linked to published records
+            "(linked_agent_roles:creator OR is_linked_to_published_record:true)",
+            # Exclude agents whose ONLY role is 'donor'
+            # This logic says: "NOT (role is only donor)"
+            "(*:* -linked_agent_roles:donor OR (*:* AND linked_agent_roles:[* TO *] AND (*:* -linked_agent_roles:donor)))"
+        ]
 
-    def is_target_agent(self, agent):
+        # Add time filter if applicable
+        if modified_since > 0 and not self.force_update:
+            mtime_utc = datetime.fromtimestamp(modified_since, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            criteria.append(f"system_mtime:[{mtime_utc} TO *]")
+
+        return criteria
+
+    def _get_nontarget_agent_criteria(self, modified_since=0):
         """
-        Determine if agent is a target creator of archival materials.
-        
-        Excludes:
-        - System users (is_user field present)
-        - System-generated agents (system_generated = true)
-        - Repository agents (is_repo_agent field present)
-        - Donor-only agents (only has 'donor' role, no creator role)
-        
-        Note: Software agents are excluded by not querying /agents/software endpoint.
-        
+        Defines the Solr query criteria for "non-target" (excluded) agents.
+        This is the logical inverse of the target criteria.
+        """
+        # The core logic for what makes an agent a "target"
+        target_logic = " AND ".join([
+            "system_generated:false",
+            "is_user:false",
+            "is_repo_agent:false",
+            "(linked_agent_roles:creator OR is_linked_to_published_record:true)",
+            "(*:* -linked_agent_roles:donor OR (*:* AND linked_agent_roles:[* TO *] AND (*:* -linked_agent_roles:donor)))"
+        ])
+
+        # We find non-targets by negating the entire block of target logic
+        criteria = [f"NOT ({target_logic})"]
+
+        # We still apply the time filter to the overall query
+        if modified_since > 0 and not self.force_update:
+            mtime_utc = datetime.fromtimestamp(modified_since, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            criteria.append(f"system_mtime:[{mtime_utc} TO *]")
+
+        return criteria
+
+    def _execute_solr_query(self, query_parts, solr_url=None, fields=['id'], indent_size=0):
+        """
+        A generic function to execute a query against the Solr index.
+
         Args:
-            agent: Agent record from ArchivesSpace API
-            
+            query_parts (list): A list of strings that will be joined with " AND ".
+            fields (list): A list of Solr fields to return in the response.
+
         Returns:
-            bool: True if agent should be indexed, False to exclude
+            list: A list of dictionaries, where each dictionary contains the requested fields.
+                  Returns an empty list on failure.
         """
-        # TIER 1: Exclude system users (PRIMARY FILTER)
-        if agent.get('is_user'):
-            return False
-        
-        # TIER 2: Exclude system-generated agents
-        if agent.get('system_generated'):
-            return False
-        
-        # TIER 3: Exclude repository agents (corporate entities only)
-        if agent.get('is_repo_agent'):
-            return False
-        
-        # TIER 4: Role-based filtering
-        roles = agent.get('linked_agent_roles', [])
-        
-        # Include if explicitly marked as creator
-        if 'creator' in roles:
-            return True
-        
-        # Exclude if ONLY marked as donor
-        if roles == ['donor']:
-            return False
-        
-        # TIER 5: Default - include if linked to published records
-        # (covers cases where roles aren't populated yet)
-        return agent.get('is_linked_to_published_record', False)
+        indent = ' ' * indent_size
+        if not query_parts:
+            self.log.error("Cannot execute Solr query with empty criteria.")
+            return []
+
+        if not solr_url:
+            solr_url = self.solr_url
+
+        query_string = " AND ".join(query_parts)
+        self.log.info(f"{indent}Executing Solr query: {query_string}")
+
+        try:
+            # First, get the total count of matching documents
+            count_params = {'q': query_string, 'rows': 0, 'wt': 'json'}
+            count_response = requests.get(f'{solr_url}/select', params=count_params)
+            self.log.info(f"  [Solr Count Request]: {count_response.request.url}")
+
+            count_response.raise_for_status()
+            num_found = count_response.json()['response']['numFound']
+
+            if num_found == 0:
+                return [] # No need to query again if nothing was found
+
+            # Now, fetch the actual data for the documents
+            data_params = {
+                'q': query_string,
+                'rows': num_found,  # Use the exact count to fetch all results
+                'fl': ','.join(fields), # Join field list into a comma-separated string
+                'wt': 'json'
+            }
+            response = requests.get(f'{solr_url}/select', params=data_params)
+            response.raise_for_status()
+            # Log the exact URL for the data request
+            self.log.info(f"  [Solr Data Request]: {response.request.url}")
+
+            return response.json()['response']['docs']
+
+        except requests.exceptions.RequestException as e:
+            self.log.error(f"Failed to execute Solr query: {e}")
+            self.log.error(f"  Failed query string: {query_string}")
+            return []
 
     def get_all_agents(self, agent_types=None, modified_since=0, indent_size=0):
         """
-        Fetch target agents from ArchivesSpace and filter to creators only.
-        Excludes system users, donors, and other non-creator agents.
-        
-        Args:
-            agent_types: List of agent types to fetch. Default: ['corporate_entities', 'people', 'families']
-            modified_since: Unix timestamp to filter agents modified since this time (if API supports it)
-            indent_size: Indentation size for logging
-            
-        Returns:
-            list: List of filtered agent URIs (e.g., '/agents/corporate_entities/123')
+        Fetch target agent URIs from the Solr index and log non-target agents.
         """
         if agent_types is None:
-            agent_types = ['corporate_entities', 'people', 'families']
-        
-        indent = ' ' * indent_size
-        target_agents = []
-        stats = {
-            'total': 0,
-            'excluded_user': 0,
-            'excluded_system_generated': 0,
-            'excluded_repo_agent': 0,
-            'excluded_donor_only': 0,
-            'excluded_no_links': 0,
-            'included': 0
-        }
-        
-        self.log.info(f'{indent}Fetching agents from ArchivesSpace and applying filters...')
-        
-        for agent_type in agent_types:
-            try:
-                # Try with modified_since parameter first
-                params = {'all_ids': True}
-                if modified_since > 0 and not self.force_update:
-                    params['modified_since'] = modified_since
-                
-                response = self.client.get(f'/agents/{agent_type}', params=params)
-                agent_ids = response.json()
-                
-                self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents, filtering...')
-                
-                # Fetch and filter each agent
-                for agent_id in agent_ids:
-                    stats['total'] += 1
-                    agent_uri = f'/agents/{agent_type}/{agent_id}'
-                    
-                    try:
-                        # Fetch full agent record to access filtering fields
-                        agent_response = self.client.get(agent_uri)
-                        agent = agent_response.json()
-                        
-                        # Apply filtering logic
-                        if agent.get('is_user'):
-                            stats['excluded_user'] += 1
-                            continue
-                        
-                        if agent.get('system_generated'):
-                            stats['excluded_system_generated'] += 1
-                            continue
-                        
-                        if agent.get('is_repo_agent'):
-                            stats['excluded_repo_agent'] += 1
-                            continue
-                        
-                        roles = agent.get('linked_agent_roles', [])
-                        
-                        # Include creators
-                        if 'creator' in roles:
-                            stats['included'] += 1
-                            target_agents.append(agent_uri)
-                            continue
-                        
-                        # Exclude donor-only agents
-                        if roles == ['donor']:
-                            stats['excluded_donor_only'] += 1
-                            continue
-                        
-                        # Default: include if linked to published records
-                        if agent.get('is_linked_to_published_record', False):
-                            stats['included'] += 1
-                            target_agents.append(agent_uri)
-                        else:
-                            stats['excluded_no_links'] += 1
-                            
-                    except Exception as e:
-                        self.log.warning(f'{indent}Error fetching agent {agent_uri}: {e}')
-                        # On error, include the agent (fail-open)
-                        target_agents.append(agent_uri)
-                    
-            except Exception as e:
-                self.log.error(f'{indent}Error fetching {agent_type} agents: {e}')
-                # If modified_since fails, try without it
-                if modified_since > 0:
-                    self.log.warning(f'{indent}Retrying {agent_type} without modified_since filter...')
-                    try:
-                        response = self.client.get(f'/agents/{agent_type}', params={'all_ids': True})
-                        agent_ids = response.json()
-                        self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents (no date filter)')
-                        
-                        # Re-process with filtering
-                        for agent_id in agent_ids:
-                            stats['total'] += 1
-                            agent_uri = f'/agents/{agent_type}/{agent_id}'
-                            
-                            try:
-                                agent_response = self.client.get(agent_uri)
-                                agent = agent_response.json()
-                                
-                                if self.is_target_agent(agent):
-                                    stats['included'] += 1
-                                    target_agents.append(agent_uri)
-                                    
-                            except Exception as e:
-                                self.log.warning(f'{indent}Error fetching agent {agent_uri}: {e}')
-                                target_agents.append(agent_uri)
-                                
-                    except Exception as e2:
-                        self.log.error(f'{indent}Failed to fetch {agent_type} agents: {e2}')
-        
-        # Log filtering statistics
-        self.log.info(f'{indent}Agent filtering complete:')
-        self.log.info(f'{indent}  Total agents processed: {stats["total"]}')
-        self.log.info(f'{indent}  Included (target creators): {stats["included"]}')
-        self.log.info(f'{indent}  Excluded (system users): {stats["excluded_user"]}')
-        self.log.info(f'{indent}  Excluded (system-generated): {stats["excluded_system_generated"]}')
-        self.log.info(f'{indent}  Excluded (repository agents): {stats["excluded_repo_agent"]}')
-        self.log.info(f'{indent}  Excluded (donor-only): {stats["excluded_donor_only"]}')
-        self.log.info(f'{indent}  Excluded (no published links): {stats["excluded_no_links"]}')
-        
-        return target_agents
+            agent_types = ['agent_person', 'agent_corporate_entity', 'agent_family']
 
+
+        modified_since = 0 if self.force_update else int(self.last_updated.timestamp())
+        indent = ' ' * indent_size
+        self.log.info(f'{indent}Fetching agent data from Solr...')
+
+        # Base criteria for all queries in this function
+        base_criteria = [f"primary_type:({' OR '.join(agent_types)})"]
+
+        # Get and log the non-target agents
+        nontarget_criteria = base_criteria + self._get_nontarget_agent_criteria(modified_since)
+        excluded_docs = self._execute_solr_query(nontarget_criteria,self.aspace_solr_url, fields=['id'])
+        if excluded_docs:
+            excluded_ids = [doc['id'] for doc in excluded_docs]
+            self.log.info(f"{indent}  Found {len(excluded_ids)} non-target (excluded) agents.")
+            # Optional: Log the actual IDs if the list isn't too long
+            # for agent_id in excluded_ids:
+            #     self.log.debug(f"{indent}    - Excluded: {agent_id}")
+
+        # Get and return the target agents
+        target_criteria = base_criteria + self._get_target_agent_criteria(modified_since)
+        self.log.info('Target Criteria:')
+        target_docs = self._execute_solr_query(target_criteria, self.aspace_solr_url, fields=['id'])
+
+        target_agents = [doc['id'] for doc in target_docs]
+        self.log.info(f"{indent}  Found {len(target_agents)} target agents to process.")
+
+        return target_agents
 
     def task_agent(self, agent_uri, agents_dir, repo_id=1, indent_size=0):
         """
@@ -1342,7 +1301,11 @@ def main():
     parser.add_argument(
         '--solr-url',
         required=True,
-        help='URL of the Solr core',)
+        help='URL of the ArcLight Solr core',)
+    parser.add_argument(
+        '--aspace-solr-url',
+        required=True,
+        help='URL of the ASpace Solr core',)
     parser.add_argument(
         '--traject-extra-config',
         default='',
@@ -1373,6 +1336,7 @@ def main():
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
+        aspace_solr_url=args.aspace_solr_url,
         traject_extra_config=args.traject_extra_config,
         force_update=args.force_update,
         agents_only=args.agents_only,
