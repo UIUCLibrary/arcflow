@@ -84,11 +84,11 @@ def test_traject_processes_sample_xml(tmp_path, sample_eac_cpf_xml):
     xml_file = tmp_path / "sample.xml"
     xml_file.write_text(sample_eac_cpf_xml)
     
-    # Use NullWriter to process without Solr
+    # Use DebugWriter to process without Solr
     result = subprocess.run([
         "bundle", "exec", "traject",
         "-c", "example_traject_config_eac_cpf.rb",
-        "-w", "Traject::NullWriter",
+        "-w", "Traject::DebugWriter",
         str(xml_file)
     ], capture_output=True, text=True)
     

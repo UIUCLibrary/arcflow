@@ -1,6 +1,7 @@
 source 'https://rubygems.org'
 
 gem 'traject', '~> 3.0'
+gem 'traject_plus'
 
 # Optional: for testing
 group :test do
