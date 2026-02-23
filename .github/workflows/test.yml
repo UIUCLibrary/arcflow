@@ -1,0 +1,34 @@
+name: Tests
+
+on: [push, pull_request]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      
+      - name: Setup Ruby (for traject smoke tests)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
+          bundler-cache: true
+      
+      - name: Install Python dependencies
+        run: pip install -r requirements-test.txt
+      
+      - name: Install Ruby dependencies
+        run: bundle install
+      
+      - name: Run unit tests (includes traject smoke tests)
+        run: pytest tests/ -v -m "not integration" --cov=arcflow
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
