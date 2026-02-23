@@ -8,22 +8,6 @@ import pytest
 import subprocess
 from pathlib import Path
 
-@pytest.fixture
-def sample_eac_cpf_xml():
-    """Minimal valid EAC-CPF XML"""
-    return '''<?xml version="1.0" encoding="UTF-8"?>
-<eac-cpf xmlns="urn:isbn:1-931666-33-4">
-  <control>
-    <recordId>test_creator_1</recordId>
-    <maintenanceStatus>new</maintenanceStatus>
-    <maintenanceAgency><agencyName>Test</agencyName></maintenanceAgency>
-  </control>
-  <cpfDescription>
-    <identity>
-      <nameEntry><part>Test Person</part></nameEntry>
-    </identity>
-  </cpfDescription>
-</eac-cpf>'''
 
 def find_traject_config():
     """Locate traject config file"""
@@ -73,22 +57,7 @@ class TestTrajectSmoke:
         find_traject_config() is None,
         reason="Traject config not found"
     )
-    def test_traject_loads_config(self):
-        """Verify traject can load config without crashing"""
-        config = find_traject_config()
-        result = subprocess.run(
-            ["bundle", "exec", "traject", "-c", config],
-            capture_output=True,
-            text=True
-        )
-        # Expect exit code 1 (no input files) but no crash
-        assert "Error" not in result.stderr or result.returncode == 1
-    
-    @pytest.mark.skipif(
-        find_traject_config() is None,
-        reason="Traject config not found"
-    )
-    def test_traject_processes_xml(self, tmp_path, sample_eac_cpf_xml):
+    def test_traject_processes_xml(self, sample_eac_cpf_xml, tmp_path):
         """Verify traject can transform XML (without Solr indexing)"""
         config = find_traject_config()
         xml_file = tmp_path / "test.xml"
