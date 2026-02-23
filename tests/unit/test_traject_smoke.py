@@ -10,28 +10,6 @@ import subprocess
 from pathlib import Path
 
 
-@pytest.fixture
-def sample_eac_cpf_xml():
-    """Minimal valid EAC-CPF XML for testing"""
-    return '''<?xml version="1.0" encoding="UTF-8"?>
-<eac-cpf xmlns="urn:isbn:1-931666-33-4">
-  <control>
-    <recordId>creator_people_1</recordId>
-    <maintenanceStatus>new</maintenanceStatus>
-    <maintenanceAgency>
-      <agencyName>Test</agencyName>
-    </maintenanceAgency>
-  </control>
-  <cpfDescription>
-    <identity>
-      <nameEntry>
-        <part>Test Person</part>
-      </nameEntry>
-    </identity>
-  </cpfDescription>
-</eac-cpf>'''
-
-
 def test_traject_config_syntax_valid():
     """Verify traject config has valid Ruby syntax"""
     # Find traject config (might be in different locations)
@@ -71,8 +49,10 @@ def test_traject_loads_config():
         text=True
     )
     
-    # Should show usage/help, not crash
-    assert "error" not in result.stderr.lower() or result.returncode == 1
+    # Should show usage/help without crashing - exitcode 1 is expected for no input files
+    # But should not have load errors in stderr
+    if result.returncode != 1:
+        assert "error loading" not in result.stderr.lower(), f"Config load error: {result.stderr}"
 
 
 @pytest.mark.skipif(

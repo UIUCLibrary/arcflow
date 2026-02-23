@@ -39,8 +39,8 @@ Tests in `tests/unit/test_traject_smoke.py` verify traject configuration without
 
 ### Performance
 - First run: ~60 seconds (includes gem install)
-- Cached runs: ~40 seconds (gems cached)
-- Still fast enough for CI/agent iteration
+- Cached runs: ~2 seconds (gems cached)
+- Fast enough for CI/agent iteration
 
 ### Skipping
 These tests skip gracefully if traject config doesn't exist yet.

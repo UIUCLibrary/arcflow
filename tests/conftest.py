@@ -11,10 +11,16 @@ def sample_eac_cpf_xml():
 <eac-cpf xmlns="urn:isbn:1-931666-33-4">
   <control>
     <recordId>creator_people_1</recordId>
+    <maintenanceStatus>new</maintenanceStatus>
+    <maintenanceAgency>
+      <agencyName>Test</agencyName>
+    </maintenanceAgency>
   </control>
   <cpfDescription>
     <identity>
-      <nameEntry><part>Test Person</part></nameEntry>
+      <nameEntry>
+        <part>Test Person</part>
+      </nameEntry>
     </identity>
   </cpfDescription>
 </eac-cpf>'''
