@@ -22,6 +22,13 @@ extend TrajectPlus::Macros
 # EAC-CPF namespace - used consistently throughout this config
 EAC_NS = { 'eac' => 'urn:isbn:1-931666-33-4' }
 
+# Creator ID pattern - matches the format used by arcflow when creating EAC-CPF files
+# Format: creator_{entity_type}_{id} where entity_type is one of:
+# - corporate_entities (for organizations)
+# - people (for persons)
+# - families (for families)
+CREATOR_ID_PATTERN = /^creator_(corporate_entities|people|families)_\d+$/
+
 settings do
   provide "solr.url", ENV['SOLR_URL'] || "http://localhost:8983/solr/blacklight-core"
   provide "solr_writer.commit_on_close", "true"
@@ -52,7 +59,7 @@ to_field 'id' do |record, accumulator, context|
   if record_id && !record_id.text.strip.empty?
     # Validate it matches expected pattern (creator_{type}_{id})
     id_value = record_id.text.strip
-    if id_value =~ /^creator_[a-z_]+_\d+$/
+    if id_value =~ CREATOR_ID_PATTERN
       accumulator << id_value
       context.logger.info("Using recordId: #{id_value}")
     else
@@ -69,7 +76,7 @@ to_field 'id' do |record, accumulator, context|
       # Remove .xml extension and any path
       id_from_filename = File.basename(source_file, '.xml')
       # Validate it matches expected pattern
-      if id_from_filename =~ /^creator_[a-z_]+_\d+$/
+      if id_from_filename =~ CREATOR_ID_PATTERN
         accumulator << id_from_filename
         context.logger.info("Using filename-based ID: #{id_from_filename}")
       else
