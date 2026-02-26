@@ -22,11 +22,7 @@ extend TrajectPlus::Macros
 # EAC-CPF namespace - used consistently throughout this config
 EAC_NS = { 'eac' => 'urn:isbn:1-931666-33-4' }
 
-# Creator ID pattern - matches the format used by arcflow when creating EAC-CPF files
-# Format: creator_{entity_type}_{id} where entity_type is one of:
-# - corporate_entities (for organizations)
-# - people (for persons)
-# - families (for families)
+# Pattern matching arcflow's creator file naming: creator_{entity_type}_{id}
 CREATOR_ID_PATTERN = /^creator_(corporate_entities|people|families)_\d+$/
 
 settings do
@@ -45,31 +41,19 @@ each_record do |record, context|
   context.clipboard[:is_creator] = true
 end
 
-# Core identity field
-# CRITICAL: The 'id' field is required by Solr's schema (uniqueKey)
-# Must ensure this field is never empty or indexing will fail
-#
-# ID FORMAT: Always use 'creator_{entity_type}_{id}' pattern
-# This matches the format used by arcflow when creating EAC-CPF files
-# We extract the ID from the filename only, as that's the source of truth
+# Solr uniqueKey - extract ID from filename using arcflow's creator_{entity_type}_{id} pattern
 to_field 'id' do |record, accumulator, context|
-  # Extract from source filename - this is the only reliable source
-  # Filename format: creator_{entity_type}_{id}.xml (e.g., creator_corporate_entities_584.xml)
   source_file = context.source_record_id || context.input_name
   if source_file
-    # Remove .xml extension and any path
     id_from_filename = File.basename(source_file, '.xml')
-    # Validate it matches expected pattern
     if id_from_filename =~ CREATOR_ID_PATTERN
       accumulator << id_from_filename
       context.logger.info("Using filename-based ID: #{id_from_filename}")
     else
-      # Filename doesn't match expected pattern - skip record
       context.logger.error("Filename doesn't match expected pattern 'creator_{type}_{id}': #{id_from_filename}")
       context.skip!("Invalid ID format in filename")
     end
   else
-    # No filename available - skip record
     context.logger.error("No source filename available for record")
     context.skip!("Missing source filename")
   end
