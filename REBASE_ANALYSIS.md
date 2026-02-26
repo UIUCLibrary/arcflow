@@ -1,7 +1,8 @@
 # Git Rebase Analysis: Creator Indexing Feature
 
 **Branch:** `index_creators`  
-**Feature Commits:** 45 (from `8b8864d` onwards)  
+**Feature Commits:** 42 non-merge commits (from `8b8864d` onwards)  
+**Total Commits in Range:** 48 (including 6 merge commits that will be dropped during rebase)
 **Analysis Date:** 2026-02-26  
 **Feature Start:** December 23, 2025 (bioghist commit)  
 **Rebase Base Commit:** `5adbf40` - "fix: reordered tasks for processing PDFs"
@@ -10,11 +11,11 @@
 
 ## Executive Summary
 
-The **creator indexing feature** on the `index_creators` branch consists of **45 commits** spanning Dec 2025 - Feb 2026. This analysis focuses ONLY on commits related to the creator/agent indexing functionality, not the entire branch history.
+The **creator indexing feature** on the `index_creators` branch consists of **42 non-merge commits** spanning Dec 2025 - Feb 2026. When you run `git rebase -i 5adbf40`, git will show 42 commits (merge commits are automatically excluded from interactive rebase).
 
 **Git History Structure:** The bioghist feature was developed on a separate branch from `30a4fef`. However, 3 batch processing commits (`0be8c89`, `ae41cef`, `5adbf40`) were added directly to index_creators between `30a4fef` and the bioghist merge. To avoid rebasing these unrelated commits, the rebase should start from `5adbf40`.
 
-**Note:** The `index_creators` branch contains 86 total commits going back to May 2025, but only the last 45 commits (from `8b8864d` onwards) are part of the creator indexing feature.
+**Note:** The `index_creators` branch contains 86 total commits going back to May 2025, but only commits from `8b8864d` onwards are part of the creator indexing feature.
 
 The creator indexing feature is **difficult to review** in its current state due to:
 
@@ -25,7 +26,7 @@ The creator indexing feature is **difficult to review** in its current state due
 5. **Mixed concerns** - Different features interleaved rather than separated
 6. **Inconsistent commit messages** - Mix of conventional commits and informal messages
 
-**Recommendation:** Perform interactive rebase on these 45 feature commits to consolidate into **4-6 logical, reviewable commits**.
+**Recommendation:** Perform interactive rebase on these 42 feature commits to consolidate into **4-6 logical, reviewable commits**.
 
 **Important:** Do NOT rebase commits before `5adbf40` (inclusive). Those commits include unrelated work like bulk import features, batch processing improvements, and classification data that should remain as-is.
 
@@ -141,7 +142,7 @@ e1645c2  Replace non-deterministic fallback IDs with explicit skip logic in EAC-
 - All 38 commits before `5adbf40` (May 2025 - Dec 2025)
 - The 3 batch processing commits: `0be8c89`, `ae41cef`, `5adbf40` (Jan 2026)
 - Total: 41 commits should remain unchanged
-- Rebase scope: 45 commits from `8b8864d` onwards
+- Rebase scope: 42 non-merge commits from `8b8864d` onwards (48 total commits including 6 merges)
 
 ---
 
@@ -368,8 +369,9 @@ Edit commit messages to follow conventional commit format consistently:
 # Start interactive rebase from the correct commit
 git rebase -i 5adbf40
 
-# This will give you 45 commits starting from 8b8864d (bioghist) onwards
-# In the editor, apply this plan to the 45 feature commits:
+# This will show 42 commits (merge commits are excluded from interactive rebase)
+# The rebase editor will show: "Rebase 5adbf40..e1645c2 onto 5adbf40 (42 commands)"
+# In the editor, apply this plan to consolidate the 42 commits:
 
 # === BIOGHIST FEATURE ===
 pick 8b8864d Add creator biographical information to EAD XML exports
@@ -435,21 +437,23 @@ pick 0fac5e0 feat: use ASpace solr to filter creator agents
 pick e1645c2 Replace non-deterministic fallback IDs (#13)
 ```
 
-**Note:** This rebase plan only covers the 48 commits starting from `8b8864d` (bioghist). Do NOT rebase:
-- Commits before `30a4fef` - these are unrelated to the creator indexing feature
+**Note:** This rebase plan only covers the 42 non-merge commits starting from `8b8864d` (bioghist). Do NOT rebase:
+- Commits before `5adbf40` (inclusive) - these are unrelated to the creator indexing feature
 - Any commits already merged into main
+- Merge commits are automatically excluded from interactive rebase
 
 ---
 
 ## 7. Simplified Rebase Plan (4-5 Commits)
 
-For easier execution, here's a more streamlined plan for the 45 feature commits:
+For easier execution, here's a more streamlined plan for the 42 non-merge commits:
 
 ```bash
 # Start from the last batch processing commit (right before creator feature)
 git rebase -i 5adbf40
 
-# This will show 45 commits starting from 8b8864d onwards
+# This will show 42 commits (merge commits excluded automatically)
+# The editor will show: "Rebase 5adbf40..e1645c2 onto 5adbf40 (42 commands)"
 # Apply this consolidation plan:
 
 # COMMIT 1: Add biographical information to EAD exports  
@@ -517,7 +521,7 @@ After rebasing, verify:
 The **creator indexing feature** requires cleanup before merging. The recommended approach is to:
 
 1. **Create a backup branch**: `git branch index_creators_backup`
-2. **Perform interactive rebase**: Consolidate 45 feature commits → 4-5 logical commits
+2. **Perform interactive rebase**: Consolidate 42 non-merge commits → 4-5 logical commits
 3. **Start from the correct commit**: `git rebase -i 5adbf40`
 4. **Test thoroughly**: Ensure all functionality works after rebase
 5. **Force push to feature branch**: `git push --force-with-lease`
@@ -525,6 +529,6 @@ The **creator indexing feature** requires cleanup before merging. The recommende
 
 **Time estimate:** 1-2 hours for careful interactive rebase + testing
 
-**Risk level:** Low-Medium (45 commits, but well-defined feature boundaries)
+**Risk level:** Low-Medium (42 commits, but well-defined feature boundaries)
 
-**Scope:** Only rebase commits from `8b8864d` onwards (bioghist through final fixes). The rebase command `git rebase -i 5adbf40` will include exactly these 45 commits, excluding the 3 batch processing commits (`0be8c89`, `ae41cef`, `5adbf40`) that came before the creator feature.
+**Scope:** The rebase command `git rebase -i 5adbf40` will show exactly 42 commits to rebase (merge commits are excluded automatically). These are the commits from `8b8864d` onwards, excluding the 3 batch processing commits (`0be8c89`, `ae41cef`, `5adbf40`) that came before the creator feature.
