@@ -745,6 +745,61 @@ class ArcFlow:
 
         return criteria
 
+    def _validate_solr_query_part(self, query_part):
+        """
+        Validate a Solr query part to prevent injection attacks.
+        
+        Args:
+            query_part (str): A single query part to validate
+            
+        Returns:
+            bool: True if the query part appears safe, False otherwise
+        """
+        if not isinstance(query_part, str):
+            return False
+        
+        # Reject empty or whitespace-only strings
+        if not query_part.strip():
+            return False
+        
+        # Check for suspicious patterns that could indicate injection attempts
+        # Allow standard Solr query syntax but reject obvious malicious patterns
+        suspicious_patterns = [
+            r';\s*\w',  # Semicolon followed by word character (command injection)
+            r'\$\{',   # Variable interpolation attempts
+            r'`',      # Command substitution
+            r'\|\|',   # Shell command chaining (|| operator)
+            r'&&\s*[a-zA-Z]',  # Shell command chaining (but allow Solr AND operator)
+        ]
+        
+        for pattern in suspicious_patterns:
+            if re.search(pattern, query_part):
+                self.log.error(f"Rejected suspicious query part: {query_part}")
+                return False
+        
+        return True
+    
+    def _validate_solr_field_name(self, field_name):
+        """
+        Validate a Solr field name to prevent injection attacks.
+        
+        Args:
+            field_name (str): A field name to validate
+            
+        Returns:
+            bool: True if the field name appears safe, False otherwise
+        """
+        if not isinstance(field_name, str):
+            return False
+        
+        # Field names should only contain alphanumeric characters, underscores, and hyphens
+        # This is stricter than Solr's actual requirements but provides better security
+        if not re.match(r'^[a-zA-Z0-9_-]+$', field_name):
+            self.log.error(f"Rejected invalid field name: {field_name}")
+            return False
+        
+        return True
+
     def _execute_solr_query(self, query_parts, solr_url=None, fields=['id'], indent_size=0):
         """
         A generic function to execute a query against the Solr index.
@@ -764,6 +819,18 @@ class ArcFlow:
 
         if not solr_url:
             solr_url = self.solr_url
+
+        # Validate all query parts before constructing the query
+        for part in query_parts:
+            if not self._validate_solr_query_part(part):
+                self.log.error(f"Query validation failed for: {part}")
+                return []
+        
+        # Validate all field names
+        for field in fields:
+            if not self._validate_solr_field_name(field):
+                self.log.error(f"Field name validation failed for: {field}")
+                return []
 
         query_string = " AND ".join(query_parts)
         self.log.info(f"{indent}Executing Solr query: {query_string}")
