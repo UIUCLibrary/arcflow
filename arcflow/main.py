@@ -530,7 +530,7 @@ class ArcFlow:
                 resource_match = re.match(resource_pattern, record)
                 agent_match = re.match(agent_pattern, record)
                 if resource_match and not self.agents_only:
-                    resource_id = match.group('resource_id')
+                    resource_id = resource_match.group('resource_id')
                     self.log.info(f'{" " * indent_size}Processing deleted resource ID {resource_id}...')
 
                     symlink_path = f'{resource_dir}/{resource_id}.xml'
@@ -546,7 +546,7 @@ class ArcFlow:
                         self.log.error(f'{" " * (indent_size+2)}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
 
                 if agent_match and not self.collections_only:
-                    agent_id = match.group('agent_id')
+                    agent_id = agent_match.group('agent_id')
                     self.log.info(f'{" " * indent_size}Processing deleted agent ID {agent_id}...')
                     file_path = f'{agent_dir}/{agent_id}.xml'
                     agent_solr_id = f'creator_{agent_type}_{agent_id}'
