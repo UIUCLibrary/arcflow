@@ -806,7 +806,8 @@ class ArcFlow:
             agent_types = ['agent_person', 'agent_corporate_entity', 'agent_family']
 
 
-        modified_since = 0 if self.force_update else int(self.last_updated.timestamp())
+        if self.force_update:
+            modified_since = 0
         indent = ' ' * indent_size
         self.log.info(f'{indent}Fetching agent data from Solr...')
 
