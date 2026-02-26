@@ -1207,7 +1207,7 @@ class ArcFlow:
                 return True
             else:
                 self.log.error(
-                    f'{indent}Failed to Solr record {solr_record_id} from Arclight Solr. Status code: {response.status_code}')
+                    f'{indent}Failed to delete Solr record {solr_record_id} from Arclight Solr. Status code: {response.status_code}')
                 return False
         except requests.exceptions.RequestException as e:
             self.log.error(f'{indent}Error deleting Solr record {solr_record_id} from ArcLight Solr: {e}')
