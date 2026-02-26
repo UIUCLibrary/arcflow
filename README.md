@@ -197,7 +197,9 @@ Optional arguments:
 python -m arcflow.main \
   --arclight-dir /path/to/arclight \
   --aspace-dir /path/to/archivesspace \
-  --solr-url http://localhost:8983/solr/blacklight-core
+  --solr-url http://localhost:8983/solr/blacklight-core \
+  --aspace-solr-url http://localhost:8983/solr/archivesspace
+
 ```
 
 **Process only agents (skip collections):**
@@ -206,6 +208,7 @@ python -m arcflow.main \
   --arclight-dir /path/to/arclight \
   --aspace-dir /path/to/archivesspace \
   --solr-url http://localhost:8983/solr/blacklight-core \
+  --aspace-solr-url http://localhost:8983/solr/archivesspace \
   --agents-only
 ```
 
@@ -215,6 +218,7 @@ python -m arcflow.main \
   --arclight-dir /path/to/arclight \
   --aspace-dir /path/to/archivesspace \
   --solr-url http://localhost:8983/solr/blacklight-core \
+  --aspace-solr-url http://localhost:8983/solr/archivesspace \
   --force-update
 ```
 
