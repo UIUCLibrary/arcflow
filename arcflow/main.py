@@ -599,9 +599,8 @@ class ArcFlow:
         
         env = os.environ.copy()
         env['REPOSITORY_ID'] = str(repo_id)
-        cmd_string = ' '.join(cmd)
         result = subprocess.run(
-            cmd_string,
+            cmd,
             cwd=self.arclight_dir,
             env=env,
             stderr=subprocess.PIPE,
