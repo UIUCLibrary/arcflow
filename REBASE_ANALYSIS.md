@@ -1,18 +1,20 @@
 # Git Rebase Analysis: Creator Indexing Feature
 
 **Branch:** `index_creators`  
-**Feature Commits:** 48 (from `8b8864d` onwards)  
+**Feature Commits:** 45 (from `8b8864d` onwards)  
 **Analysis Date:** 2026-02-26  
 **Feature Start:** December 23, 2025 (bioghist commit)  
-**Base Commit:** `30a4fef` - "Merge branch 'batch-processing' into main"
+**Rebase Base Commit:** `5adbf40` - "fix: reordered tasks for processing PDFs"
 
 ---
 
 ## Executive Summary
 
-The **creator indexing feature** on the `index_creators` branch consists of **48 commits** spanning Dec 2025 - Feb 2026. This analysis focuses ONLY on commits related to the creator/agent indexing functionality, not the entire branch history.
+The **creator indexing feature** on the `index_creators` branch consists of **45 commits** spanning Dec 2025 - Feb 2026. This analysis focuses ONLY on commits related to the creator/agent indexing functionality, not the entire branch history.
 
-**Note:** The `index_creators` branch contains 86 total commits going back to May 2025, but only the last 48 commits (from `8b8864d` onwards) are part of the creator indexing feature. Earlier commits relate to bulk import, batch processing, and other unrelated features.
+**Git History Structure:** The bioghist feature was developed on a separate branch from `30a4fef`. However, 3 batch processing commits (`0be8c89`, `ae41cef`, `5adbf40`) were added directly to index_creators between `30a4fef` and the bioghist merge. To avoid rebasing these unrelated commits, the rebase should start from `5adbf40`.
+
+**Note:** The `index_creators` branch contains 86 total commits going back to May 2025, but only the last 45 commits (from `8b8864d` onwards) are part of the creator indexing feature.
 
 The creator indexing feature is **difficult to review** in its current state due to:
 
@@ -23,9 +25,9 @@ The creator indexing feature is **difficult to review** in its current state due
 5. **Mixed concerns** - Different features interleaved rather than separated
 6. **Inconsistent commit messages** - Mix of conventional commits and informal messages
 
-**Recommendation:** Perform interactive rebase on these 48 feature commits to consolidate into **4-6 logical, reviewable commits**.
+**Recommendation:** Perform interactive rebase on these 45 feature commits to consolidate into **4-6 logical, reviewable commits**.
 
-**Important:** Do NOT rebase earlier commits (before `8b8864d`). Those commits include unrelated work like bulk import features, batch processing improvements, and classification data that should remain as-is.
+**Important:** Do NOT rebase commits before `5adbf40` (inclusive). Those commits include unrelated work like bulk import features, batch processing improvements, and classification data that should remain as-is.
 
 ---
 
@@ -135,9 +137,11 @@ b99cf79  Refactor deletion into more abstract methods and add delete logic for c
 e1645c2  Replace non-deterministic fallback IDs with explicit skip logic in EAC-CPF indexing (#13)  (Copilot, 2026-02-26)
 ```
 
-**Commits NOT part of this feature** (should remain unchanged):
-- All 38 commits before `8b8864d` (May 2025 - Dec 2025)
-- These include: bulk import features, batch processing, classification data, multiprocessing, etc.
+**Commits NOT part of this feature** (excluded from rebase):
+- All 38 commits before `5adbf40` (May 2025 - Dec 2025)
+- The 3 batch processing commits: `0be8c89`, `ae41cef`, `5adbf40` (Jan 2026)
+- Total: 41 commits should remain unchanged
+- Rebase scope: 45 commits from `8b8864d` onwards
 
 ---
 
@@ -356,19 +360,16 @@ Edit commit messages to follow conventional commit format consistently:
 
 ## 6. Interactive Rebase TODO List
 
-**IMPORTANT:** Start the rebase from commit `30a4fef` (the commit BEFORE the bioghist feature).
+**IMPORTANT:** Start the rebase from commit `5adbf40` (the last batch processing commit before the creator feature).
+
+**Git History Note:** The bioghist feature (`8b8864d`) was developed on a separate branch that diverged from `30a4fef`. However, there are 3 batch processing commits (`0be8c89`, `ae41cef`, `5adbf40`) that were added to the index_creators branch between `30a4fef` and the bioghist merge. To avoid rebasing these unrelated commits, start from `5adbf40`.
 
 ```bash
-# Start interactive rebase from the commit before the feature
-git rebase -i 30a4fef
+# Start interactive rebase from the correct commit
+git rebase -i 5adbf40
 
-# OR more explicitly:
-git rebase -i 8b8864d^
-
-# In the editor, apply this plan to the 48 feature commits:
-
-# === BATCH PROCESSING & EARLY INFRA (NOT PART OF REBASE - these stay as-is) ===
-# DO NOT INCLUDE: 0be8c89, ae41cef, 5adbf40 (batch processing fixes from Jan)
+# This will give you 45 commits starting from 8b8864d (bioghist) onwards
+# In the editor, apply this plan to the 45 feature commits:
 
 # === BIOGHIST FEATURE ===
 pick 8b8864d Add creator biographical information to EAD XML exports
@@ -442,11 +443,14 @@ pick e1645c2 Replace non-deterministic fallback IDs (#13)
 
 ## 7. Simplified Rebase Plan (4-5 Commits)
 
-For easier execution, here's a more streamlined plan for the 48 feature commits:
+For easier execution, here's a more streamlined plan for the 45 feature commits:
 
 ```bash
-# Start from commit before bioghist feature
-git rebase -i 30a4fef  # or: git rebase -i 8b8864d^
+# Start from the last batch processing commit (right before creator feature)
+git rebase -i 5adbf40
+
+# This will show 45 commits starting from 8b8864d onwards
+# Apply this consolidation plan:
 
 # COMMIT 1: Add biographical information to EAD exports  
 pick 8b8864d
@@ -513,14 +517,14 @@ After rebasing, verify:
 The **creator indexing feature** requires cleanup before merging. The recommended approach is to:
 
 1. **Create a backup branch**: `git branch index_creators_backup`
-2. **Perform interactive rebase**: Consolidate 48 feature commits → 4-5 logical commits
-3. **Start from the correct commit**: `git rebase -i 30a4fef` (or `git rebase -i 8b8864d^`)
+2. **Perform interactive rebase**: Consolidate 45 feature commits → 4-5 logical commits
+3. **Start from the correct commit**: `git rebase -i 5adbf40`
 4. **Test thoroughly**: Ensure all functionality works after rebase
 5. **Force push to feature branch**: `git push --force-with-lease`
 6. **Request review**: Now reviewable as 4-5 focused commits
 
 **Time estimate:** 1-2 hours for careful interactive rebase + testing
 
-**Risk level:** Low-Medium (48 commits, but well-defined feature boundaries)
+**Risk level:** Low-Medium (45 commits, but well-defined feature boundaries)
 
-**Scope:** Only rebase commits from `8b8864d` onwards (bioghist through final fixes). Earlier commits (bulk import, batch processing, classification data) should remain unchanged.
+**Scope:** Only rebase commits from `8b8864d` onwards (bioghist through final fixes). The rebase command `git rebase -i 5adbf40` will include exactly these 45 commits, excluding the 3 batch processing commits (`0be8c89`, `ae41cef`, `5adbf40`) that came before the creator feature.
