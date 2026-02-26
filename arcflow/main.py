@@ -9,12 +9,13 @@ import subprocess
 import re
 import logging
 import math
+import glob
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
-from utils.stage_classifications import extract_labels
+from .utils.stage_classifications import extract_labels
 
 
 base_dir = os.path.abspath((__file__) + "/../../")
@@ -38,10 +39,9 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, force_update=False):
         self.solr_url = solr_url
         self.batch_size = 1000
-        self.traject_extra_config = f'-c {traject_extra_config}' if traject_extra_config.strip() else ''
         self.arclight_dir = arclight_dir
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
@@ -466,19 +466,18 @@ class ArcFlow:
                 r.get()
 
             # Remove pending symlinks after indexing
-            for repo_id, batch_num in batches:
-                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
-                try:
-                    result = subprocess.run(
-                        f'rm {xml_file_path}',
-                        shell=True,
-                        cwd=self.arclight_dir,
-                        stderr=subprocess.PIPE,)
-                    self.log.error(f'{" " * indent_size}{result.stderr.decode("utf-8")}')
-                    if result.returncode != 0:
-                        self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
-                except Exception as e:
-                    self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
+                for repo_id, batch_num in batches:
+                    xml_file_pattern = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                    xml_files = glob.glob(xml_file_pattern)
+
+                    for xml_file_path in xml_files:
+                        try:
+                            os.remove(xml_file_path)
+                            self.log.info(f'{" " * indent_size}Removed pending symlink {xml_file_path}')
+                        except FileNotFoundError:
+                            self.log.warning(f'{" " * indent_size}File not found: {xml_file_path}')
+                        except Exception as e:
+                            self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
 
             # Tasks for processing PDFs
             results_4 = [pool.apply_async(
@@ -534,12 +533,55 @@ class ArcFlow:
         indent = ' ' * indent_size
         self.log.info(f'{indent}Indexing pending resources in repository ID {repo_id} to ArcLight Solr...')
         try:
+
+            # Set traject config path
+
+            # Make sure we can find arclight path
+            result_show = subprocess.run(
+                ['bundle', 'show', 'arclight'],
+                capture_output=True,
+                text=True,
+                cwd=self.arclight_dir
+            )
+            arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
+
+            if not arclight_path:
+                self.log.error(f'{indent}Could not find arclight gem path')
+                return
+
+            traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
+
+            # Expand wildcards with glob to get files list
+            xml_files = glob.glob(xml_file_path)
+
+            if not xml_files:
+                self.log.warning(f'{indent}No files found matching pattern: {xml_file_path}')
+                return
+
+
+            cmd = [
+                'bundle', 'exec', 'traject',
+                '-u', self.solr_url,
+                '-s', 'processing_thread_pool=8',
+                '-s', 'solr_writer.thread_pool=8',
+                '-s', f'solr_writer.batch_size={self.batch_size}',
+                '-s', 'solr_writer.commit_on_close=true',
+                '-i', 'xml',
+                '-c', traject_config,
+                *xml_files
+            ]
+
+            env = os.environ.copy()
+            env['REPOSITORY_ID'] = str(repo_id)
+
             result = subprocess.run(
-                f'REPOSITORY_ID={repo_id} bundle exec traject -u {self.solr_url} -s processing_thread_pool=8 -s solr_writer.thread_pool=8 -s solr_writer.batch_size={self.batch_size} -s solr_writer.commit_on_close=true -i xml -c $(bundle show arclight)/lib/arclight/traject/ead2_config.rb {self.traject_extra_config} {xml_file_path}',
-#                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  TRAJECT_SETTINGS="processing_thread_pool=8 solr_writer.thread_pool=8 solr_writer.batch_size=1000 solr_writer.commit_on_close=false" bundle exec rake arcuit:index',
-                shell=True,
+                cmd,
                 cwd=self.arclight_dir,
-                stderr=subprocess.PIPE,)
+                env=env,
+                stderr=subprocess.PIPE,
+            )
+
+
             self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
             if result.returncode != 0:
                 self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
@@ -780,17 +822,12 @@ def main():
         '--solr-url',
         required=True,
         help='URL of the Solr core',)
-    parser.add_argument(
-        '--traject-extra-config',
-        default='',
-        help='Path to extra Traject configuration file',)
     args = parser.parse_args()
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
-        traject_extra_config=args.traject_extra_config,
         force_update=args.force_update)
     arcflow.run()
 
