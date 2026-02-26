@@ -9,8 +9,10 @@ import subprocess
 import re
 import logging
 import math
+import sys
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
+from xml.etree import ElementTree as ET
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
@@ -38,14 +40,20 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
         self.solr_url = solr_url
+        self.aspace_solr_url = aspace_solr_url
         self.batch_size = 1000
-        self.traject_extra_config = f'-c {traject_extra_config}' if traject_extra_config.strip() else ''
+        clean_extra_config = traject_extra_config.strip()
+        self.traject_extra_config = clean_extra_config or None
         self.arclight_dir = arclight_dir
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
         self.force_update = force_update
+        self.agents_only = agents_only
+        self.collections_only = collections_only
+        self.arcuit_dir = arcuit_dir
+        self.skip_creator_indexing = skip_creator_indexing
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -395,9 +403,11 @@ class ArcFlow:
         ArchivesSpace.
         """
         xml_dir = f'{self.arclight_dir}/public/xml'
+        resource_dir = f'{xml_dir}/resources'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
         modified_since = int(self.last_updated.timestamp())
+        
         if self.force_update or modified_since <= 0:
             modified_since = 0
             # delete all EADs and related files in ArcLight Solr
@@ -407,7 +417,7 @@ class ArcFlow:
                     json={'delete': {'query': '*:*'}},
                 )
                 if response.status_code == 200:
-                    self.log.info('Deleted all EADs from ArcLight Solr.')
+                    self.log.info('Deleted all EADs and Creators from ArcLight Solr.')
                     # delete related directories after suscessful
                     # deletion from solr
                     for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
@@ -419,10 +429,10 @@ class ArcFlow:
                 else:
                     self.log.error(f'Failed to delete all EADs from Arclight Solr. Status code: {response.status_code}')
             except requests.exceptions.RequestException as e:
-                self.log.error(f'Error deleting all EADs from ArcLight Solr: {e}')
+                self.log.error(f'Error deleting all EADs and Creators from ArcLight Solr: {e}')
 
         # create directories if don't exist
-        for dir_path in (xml_dir, pdf_dir):
+        for dir_path in (resource_dir, pdf_dir):
             os.makedirs(dir_path, exist_ok=True)
 
         # process resources that have been modified in ArchivesSpace since last update
@@ -435,7 +445,7 @@ class ArcFlow:
             # Tasks for processing repositories
             results_1 = [pool.apply_async(
                 self.task_repository, 
-                args=(repo, xml_dir, modified_since, indent_size)) 
+                args=(repo, resource_dir, modified_since, indent_size))
                 for repo in repos]
             # Collect outputs from repository tasks
             outputs_1 = [r.get() for r in results_1]
@@ -443,7 +453,7 @@ class ArcFlow:
             # Tasks for processing resources
             results_2 = [pool.apply_async(
                 self.task_resource, 
-                args=(repo, resource_id, xml_dir, pdf_dir, indent_size)) 
+                args=(repo, resource_id, resource_dir, pdf_dir, indent_size))
                 for repo, resources in outputs_1 for resource_id in resources]
             # Collect outputs from resource tasks
             outputs_2 = [r.get() for r in results_2]
@@ -457,8 +467,8 @@ class ArcFlow:
 
             # Tasks for indexing pending resources
             results_3 = [pool.apply_async(
-                self.index,
-                args=(repo_id, f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
+                self.index_collections,
+                args=(repo_id, f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
                 for repo_id, batch_num in batches]
 
             # Wait for indexing tasks to complete
@@ -467,7 +477,7 @@ class ArcFlow:
 
             # Remove pending symlinks after indexing
             for repo_id, batch_num in batches:
-                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                xml_file_path = f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml'
                 try:
                     result = subprocess.run(
                         f'rm {xml_file_path}',
@@ -490,14 +500,23 @@ class ArcFlow:
             for r in results_4:
                 r.get()
 
-        # processing deleted resources is not needed when 
-        # force-update is set or modified_since is set to 0
-        if self.force_update or modified_since <= 0:
-            self.log.info('Skipping deleted resources processing.')
-            return
+        return
 
-        # process resources that have been deleted since last update in ArchivesSpace
-        pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<resource_id>\d+)$'
+
+
+    def process_deleted_records(self):
+
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        resource_dir = f'{xml_dir}/resources'
+        agent_dir = f'{xml_dir}/agents'
+        pdf_dir = f'{self.arclight_dir}/public/pdf'
+        modified_since = int(self.last_updated.timestamp())
+
+        # process records that have been deleted since last update in ArchivesSpace
+        resource_pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<record_id>\d+)$'
+        agent_pattern = r'^/agents/(?P<agent_type>people|corporate_entities|families)/(?P<record_id>\d+)$'
+
+
         page = 1
         while True:
             deleted_records = self.client.get(
@@ -508,12 +527,13 @@ class ArcFlow:
                 }
             ).json()
             for record in deleted_records['results']:
-                match = re.match(pattern, record)
-                if match:
+                resource_match = re.match(resource_pattern, record)
+                agent_match = re.match(agent_pattern, record)
+                if resource_match and not self.agents_only:
                     resource_id = match.group('resource_id')
                     self.log.info(f'{" " * indent_size}Processing deleted resource ID {resource_id}...')
 
-                    symlink_path = f'{xml_dir}/{resource_id}.xml'
+                    symlink_path = f'{resource_dir}/{resource_id}.xml'
                     ead_id = self.get_ead_from_symlink(symlink_path)
                     if ead_id:
                         self.delete_ead(
@@ -525,22 +545,72 @@ class ArcFlow:
                     else:
                         self.log.error(f'{" " * (indent_size+2)}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
 
+                if agent_match and not self.collections_only:
+                    agent_id = match.group('agent_id')
+                    self.log.info(f'{" " * indent_size}Processing deleted agent ID {agent_id}...')
+                    file_path = f'{agent_dir}/{agent_id}.xml'
+                    agent_solr_id = f'creator_{agent_type}_{agent_id}'
+                    self.delete_creator(file_path, agent_solr_id, indent_size)
+
+
             if deleted_records['last_page'] == page:
                 break
             page += 1
 
 
-    def index(self, repo_id, xml_file_path, indent_size=0):
+    def index_collections(self, repo_id, xml_file_path, indent_size=0):
+        """Index collection XML files to Solr using traject."""
         indent = ' ' * indent_size
         self.log.info(f'{indent}Indexing pending resources in repository ID {repo_id} to ArcLight Solr...')
         try:
+            # Get arclight traject config path
+            result_show = subprocess.run(
+                ['bundle', 'show', 'arclight'],
+                capture_output=True,
+                text=True,
+                cwd=self.arclight_dir
+            )
+            arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
+            
+            if not arclight_path:
+                self.log.error(f'{indent}Could not find arclight gem path')
+                return
+            
+            traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
+            
+            cmd = [
+                'bundle', 'exec', 'traject',
+                '-u', self.solr_url,
+                '-s', 'processing_thread_pool=8',
+                '-s', 'solr_writer.thread_pool=8',
+                '-s', f'solr_writer.batch_size={self.batch_size}',
+                '-s', 'solr_writer.commit_on_close=true',
+                '-i', 'xml',
+                '-c', traject_config
+            ]
+            
+            if self.traject_extra_config:
+                if isinstance(self.traject_extra_config, (list, tuple)):
+                    cmd.extend(self.traject_extra_config)
+                else:
+                    # Treat a string extra config as a path and pass it with -c
+                    cmd.extend(['-c', self.traject_extra_config])
+            
+            cmd.append(xml_file_path)
+            
+            env = os.environ.copy()
+            env['REPOSITORY_ID'] = str(repo_id)
+            cmd_string = ' '.join(cmd)
             result = subprocess.run(
-                f'REPOSITORY_ID={repo_id} bundle exec traject -u {self.solr_url} -s processing_thread_pool=8 -s solr_writer.thread_pool=8 -s solr_writer.batch_size={self.batch_size} -s solr_writer.commit_on_close=true -i xml -c $(bundle show arclight)/lib/arclight/traject/ead2_config.rb {self.traject_extra_config} {xml_file_path}',
-#                f'FILE={xml_file_path} SOLR_URL={self.solr_url} REPOSITORY_ID={repo_id}  TRAJECT_SETTINGS="processing_thread_pool=8 solr_writer.thread_pool=8 solr_writer.batch_size=1000 solr_writer.commit_on_close=false" bundle exec rake arcuit:index',
+                cmd_string,
                 shell=True,
                 cwd=self.arclight_dir,
-                stderr=subprocess.PIPE,)
-            self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
+                env=env,
+                stderr=subprocess.PIPE,
+            )
+
+            if result.stderr:
+                self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
             if result.returncode != 0:
                 self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
             else:
@@ -627,6 +697,428 @@ class ArcFlow:
             return '\n'.join(bioghist_elements)
         return None
 
+    def _get_target_agent_criteria(self, modified_since=0):
+        """
+        Defines the Solr query criteria for "target" agents.
+        These are agents we want to process.
+        """
+        # Basic filters for agents to include
+        criteria = [
+            "system_generated:false",
+            "is_user:false",
+            "is_repo_agent:false",
+            # Include agents that are creators OR are linked to published records
+            "(linked_agent_roles:creator OR is_linked_to_published_record:true)",
+            # Exclude agents whose ONLY role is 'donor'
+            # This logic says: "NOT (role is only donor)"
+            "(*:* -linked_agent_roles:donor OR (*:* AND linked_agent_roles:[* TO *] AND (*:* -linked_agent_roles:donor)))"
+        ]
+
+        # Add time filter if applicable
+        if modified_since > 0 and not self.force_update:
+            mtime_utc = datetime.fromtimestamp(modified_since, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            criteria.append(f"system_mtime:[{mtime_utc} TO *]")
+
+        return criteria
+
+    def _get_nontarget_agent_criteria(self, modified_since=0):
+        """
+        Defines the Solr query criteria for "non-target" (excluded) agents.
+        This is the logical inverse of the target criteria.
+        """
+        # The core logic for what makes an agent a "target"
+        target_logic = " AND ".join([
+            "system_generated:false",
+            "is_user:false",
+            "is_repo_agent:false",
+            "(linked_agent_roles:creator OR is_linked_to_published_record:true)",
+            "(*:* -linked_agent_roles:donor OR (*:* AND linked_agent_roles:[* TO *] AND (*:* -linked_agent_roles:donor)))"
+        ])
+
+        # We find non-targets by negating the entire block of target logic
+        criteria = [f"NOT ({target_logic})"]
+
+        # We still apply the time filter to the overall query
+        if modified_since > 0 and not self.force_update:
+            mtime_utc = datetime.fromtimestamp(modified_since, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            criteria.append(f"system_mtime:[{mtime_utc} TO *]")
+
+        return criteria
+
+    def _execute_solr_query(self, query_parts, solr_url=None, fields=['id'], indent_size=0):
+        """
+        A generic function to execute a query against the Solr index.
+
+        Args:
+            query_parts (list): A list of strings that will be joined with " AND ".
+            fields (list): A list of Solr fields to return in the response.
+
+        Returns:
+            list: A list of dictionaries, where each dictionary contains the requested fields.
+                  Returns an empty list on failure.
+        """
+        indent = ' ' * indent_size
+        if not query_parts:
+            self.log.error("Cannot execute Solr query with empty criteria.")
+            return []
+
+        if not solr_url:
+            solr_url = self.solr_url
+
+        query_string = " AND ".join(query_parts)
+        self.log.info(f"{indent}Executing Solr query: {query_string}")
+
+        try:
+            # First, get the total count of matching documents
+            count_params = {'q': query_string, 'rows': 0, 'wt': 'json'}
+            count_response = requests.get(f'{solr_url}/select', params=count_params)
+            self.log.info(f"  [Solr Count Request]: {count_response.request.url}")
+
+            count_response.raise_for_status()
+            num_found = count_response.json()['response']['numFound']
+
+            if num_found == 0:
+                return [] # No need to query again if nothing was found
+
+            # Now, fetch the actual data for the documents
+            data_params = {
+                'q': query_string,
+                'rows': num_found,  # Use the exact count to fetch all results
+                'fl': ','.join(fields), # Join field list into a comma-separated string
+                'wt': 'json'
+            }
+            response = requests.get(f'{solr_url}/select', params=data_params)
+            response.raise_for_status()
+            # Log the exact URL for the data request
+            self.log.info(f"  [Solr Data Request]: {response.request.url}")
+
+            return response.json()['response']['docs']
+
+        except requests.exceptions.RequestException as e:
+            self.log.error(f"Failed to execute Solr query: {e}")
+            self.log.error(f"  Failed query string: {query_string}")
+            return []
+
+    def get_all_agents(self, agent_types=None, modified_since=0, indent_size=0):
+        """
+        Fetch target agent URIs from the Solr index and log non-target agents.
+        """
+        if agent_types is None:
+            agent_types = ['agent_person', 'agent_corporate_entity', 'agent_family']
+
+
+        modified_since = 0 if self.force_update else int(self.last_updated.timestamp())
+        indent = ' ' * indent_size
+        self.log.info(f'{indent}Fetching agent data from Solr...')
+
+        # Base criteria for all queries in this function
+        base_criteria = [f"primary_type:({' OR '.join(agent_types)})"]
+
+        # Get and log the non-target agents
+        nontarget_criteria = base_criteria + self._get_nontarget_agent_criteria(modified_since)
+        excluded_docs = self._execute_solr_query(nontarget_criteria,self.aspace_solr_url, fields=['id'])
+        if excluded_docs:
+            excluded_ids = [doc['id'] for doc in excluded_docs]
+            self.log.info(f"{indent}  Found {len(excluded_ids)} non-target (excluded) agents.")
+            # Optional: Log the actual IDs if the list isn't too long
+            # for agent_id in excluded_ids:
+            #     self.log.debug(f"{indent}    - Excluded: {agent_id}")
+
+        # Get and return the target agents
+        target_criteria = base_criteria + self._get_target_agent_criteria(modified_since)
+        self.log.info('Target Criteria:')
+        target_docs = self._execute_solr_query(target_criteria, self.aspace_solr_url, fields=['id'])
+
+        target_agents = [doc['id'] for doc in target_docs]
+        self.log.info(f"{indent}  Found {len(target_agents)} target agents to process.")
+
+        return target_agents
+
+    def task_agent(self, agent_uri, agents_dir, repo_id=1, indent_size=0):
+        """
+        Process a single agent and generate a creator document in EAC-CPF XML format.
+        Retrieves EAC-CPF directly from ArchivesSpace archival_contexts endpoint.
+        
+        Args:
+            agent_uri: Agent URI from ArchivesSpace (e.g., '/agents/corporate_entities/123')
+            agents_dir: Directory to save agent XML files
+            repo_id: Repository ID to use for archival_contexts endpoint (default: 1)
+            indent_size: Indentation size for logging
+            
+        Returns:
+            str: Creator document ID if successful, None otherwise
+        """
+        indent = ' ' * indent_size
+        
+        try:
+            # Parse agent URI to extract type and ID
+            # URI format: /agents/{agent_type}/{id}
+            parts = agent_uri.strip('/').split('/')
+            if len(parts) != 3 or parts[0] != 'agents':
+                self.log.error(f'{indent}Invalid agent URI format: {agent_uri}')
+                return None
+            
+            agent_type = parts[1]  # e.g., 'corporate_entities', 'people', 'families'
+            agent_id = parts[2]
+            
+            # Construct EAC-CPF endpoint
+            # Format: /repositories/{repo_id}/archival_contexts/{agent_type}/{id}.xml
+            eac_cpf_endpoint = f'/repositories/{repo_id}/archival_contexts/{agent_type}/{agent_id}.xml'
+            
+            self.log.debug(f'{indent}Fetching EAC-CPF from: {eac_cpf_endpoint}')
+            
+            # Fetch EAC-CPF XML
+            response = self.client.get(eac_cpf_endpoint)
+            
+            if response.status_code != 200:
+                self.log.error(f'{indent}Failed to fetch EAC-CPF for {agent_uri}: HTTP {response.status_code}')
+                return None
+            
+            eac_cpf_xml = response.text
+            
+            # Parse the EAC-CPF XML to validate and inspect its structure
+            try:
+                root = ET.fromstring(eac_cpf_xml)
+                self.log.debug(f'{indent}Parsed EAC-CPF XML root element: {root.tag}')
+            except ET.ParseError as e:
+                self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
+                return None
+            
+            # Generate creator ID
+            creator_id = f'creator_{agent_type}_{agent_id}'
+            
+            # Save EAC-CPF XML to file
+            filename = f'{agents_dir}/{creator_id}.xml'
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(eac_cpf_xml)
+            
+            self.log.info(f'{indent}Created creator document: {creator_id}')
+            return creator_id
+            
+        except Exception as e:
+            self.log.error(f'{indent}Error processing agent {agent_uri}: {e}')
+            import traceback
+            self.log.error(f'{indent}{traceback.format_exc()}')
+            return None
+
+    def process_creators(self):
+        """
+        Process creator agents and generate standalone creator documents.
+
+        Returns:
+            list: List of created creator document IDs
+        """
+
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        agents_dir = f'{xml_dir}/agents'
+        modified_since = int(self.last_updated.timestamp())
+        indent_size = 0
+        indent = ' ' * indent_size
+
+        self.log.info(f'{indent}Processing creator agents...')
+
+        # Create agents directory if it doesn't exist
+        os.makedirs(agents_dir, exist_ok=True)
+
+        # Get agents to process
+        agents = self.get_all_agents(modified_since=modified_since, indent_size=indent_size)
+
+        # Process agents in parallel
+        with Pool(processes=10) as pool:
+            results_agents = [pool.apply_async(
+                self.task_agent,
+                args=(agent_uri_item, agents_dir, 1, indent_size))  # Use repo_id=1
+                for agent_uri_item in agents]
+
+            creator_ids = [r.get() for r in results_agents]
+            creator_ids = [cid for cid in creator_ids if cid is not None]
+
+        self.log.info(f'{indent}Created {len(creator_ids)} creator documents.')
+
+        # NOTE: Collection links are NOT added to creator XML files.
+        # Instead, linking is handled via Solr using the persistent_id field:
+        # - Creator bioghist has persistent_id as the 'id' attribute
+        # - Collection EADs reference creators via bioghist with persistent_id
+        # - Solr indexes both, allowing queries to link them
+        # This avoids the expensive operation of scanning all resources to build a linkage map.
+
+        # Index creators to Solr (if not skipped)
+        if not self.skip_creator_indexing and creator_ids:
+            self.log.info(f'{indent}Indexing {len(creator_ids)} creator records to Solr...')
+            traject_config = self.find_traject_config()
+            if traject_config:
+                self.log.info(f'{indent}Using traject config: {traject_config}')
+                indexed = self.index_creators(agents_dir, creator_ids)
+                self.log.info(f'{indent}Creator indexing complete: {indexed}/{len(creator_ids)} indexed')
+            else:
+                self.log.warning(f'{indent}Skipping creator indexing (traject config not found)')
+                self.log.info(f'{indent}To index manually:')
+                self.log.info(f'{indent}  cd {self.arclight_dir}')
+                self.log.info(f'{indent}  bundle exec traject -u {self.solr_url} -i xml \\')
+                self.log.info(f'{indent}    -c /path/to/arcuit-gem/traject_config_eac_cpf.rb \\')
+                self.log.info(f'{indent}    {agents_dir}/*.xml')
+        elif self.skip_creator_indexing:
+            self.log.info(f'{indent}Skipping creator indexing (--skip-creator-indexing flag set)')
+
+        return creator_ids
+
+
+    def find_traject_config(self):
+        """
+        Find the traject config for creator indexing.
+        
+        Search order (follows collection records pattern):
+        1. arcuit_dir if provided (most up-to-date user control)
+        2. arcuit gem via bundle show (for backward compatibility)
+        3. example_traject_config_eac_cpf.rb in arcflow (fallback when used as module without arcuit)
+        
+        Returns:
+            str: Path to traject config, or None if not found
+        """
+        self.log.info('Searching for traject_config_eac_cpf.rb...')
+        searched_paths = []
+        
+        # Try 1: arcuit_dir if provided (highest priority - user's explicit choice)
+        if self.arcuit_dir:
+            self.log.debug(f'  Checking arcuit_dir parameter: {self.arcuit_dir}')
+            candidate_paths = [
+                os.path.join(self.arcuit_dir, 'traject_config_eac_cpf.rb'),
+                os.path.join(self.arcuit_dir, 'lib', 'arcuit', 'traject', 'traject_config_eac_cpf.rb'),
+            ]
+            searched_paths.extend(candidate_paths)
+            for traject_config in candidate_paths:
+                if os.path.exists(traject_config):
+                    self.log.info(f'✓ Using traject config from arcuit_dir: {traject_config}')
+                    return traject_config
+            self.log.debug('  traject_config_eac_cpf.rb not found in arcuit_dir')
+        
+        # Try 2: bundle show arcuit (for backward compatibility when arcuit_dir not provided)
+        try:
+            result = subprocess.run(
+                ['bundle', 'show', 'arcuit'],
+                cwd=self.arclight_dir,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                arcuit_path = result.stdout.strip()
+                self.log.debug(f'  Found arcuit gem at: {arcuit_path}')
+                candidate_paths = [
+                    os.path.join(arcuit_path, 'traject_config_eac_cpf.rb'),
+                    os.path.join(arcuit_path, 'lib', 'arcuit', 'traject', 'traject_config_eac_cpf.rb'),
+                ]
+                searched_paths.extend(candidate_paths)
+                for traject_config in candidate_paths:
+                    if os.path.exists(traject_config):
+                        self.log.info(f'✓ Using traject config from arcuit gem: {traject_config}')
+                        return traject_config
+                self.log.debug(
+                    '  traject_config_eac_cpf.rb not found in arcuit gem '
+                    '(checked root and lib/arcuit/traject/ subdirectory)'
+                )
+            else:
+                self.log.debug('  arcuit gem not found via bundle show')
+        except Exception as e:
+            self.log.debug(f'  Error checking for arcuit gem: {e}')
+        
+        # Try 3: example file in arcflow package (fallback for module usage without arcuit)
+        # We know exactly where this file is located - at the repo root
+        arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
+        arcflow_repo_root = os.path.dirname(arcflow_package_dir)
+        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
+        searched_paths.append(traject_config)
+        
+        if os.path.exists(traject_config):
+            self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
+            self.log.info(
+                '  Note: Using example config. For production, copy this file to your '
+                'arcuit gem or specify location with --arcuit-dir.'
+            )
+            return traject_config
+        
+        # No config found anywhere - show all paths searched
+        self.log.error('✗ Could not find traject_config_eac_cpf.rb in any of these locations:')
+        for i, path in enumerate(searched_paths, 1):
+            self.log.error(f'  {i}. {path}')
+        self.log.error('')
+        self.log.error('  Add traject_config_eac_cpf.rb to your arcuit gem or specify with --arcuit-dir.')
+        return None
+
+
+    def index_creators(self, agents_dir, creator_ids, batch_size=100):
+        """
+        Index creator XML files to Solr using traject.
+        
+        Args:
+            agents_dir: Directory containing creator XML files
+            creator_ids: List of creator IDs to index
+            batch_size: Number of files to index per traject call (default: 100)
+        
+        Returns:
+            int: Number of successfully indexed creators
+        """
+        traject_config = self.find_traject_config()
+        if not traject_config:
+            return 0
+        
+        indexed_count = 0
+        failed_count = 0
+        
+        # Process in batches to avoid command line length limits
+        total_batches = math.ceil(len(creator_ids) / batch_size)
+        for i in range(0, len(creator_ids), batch_size):
+            batch = creator_ids[i:i+batch_size]
+            batch_num = (i // batch_size) + 1
+            
+            # Build list of XML files for this batch
+            xml_files = [f'{agents_dir}/{cid}.xml' for cid in batch]
+            
+            # Filter to only existing files
+            existing_files = [f for f in xml_files if os.path.exists(f)]
+            
+            if not existing_files:
+                self.log.warning(f'  Batch {batch_num}/{total_batches}: No files found, skipping')
+                continue
+            
+            try:
+                cmd = [
+                    'bundle', 'exec', 'traject',
+                    '-u', self.solr_url,
+                    '-i', 'xml',
+                    '-c', traject_config
+                ] + existing_files
+                
+                self.log.info(f'  Indexing batch {batch_num}/{total_batches}: {len(existing_files)} files')
+                
+                result = subprocess.run(
+                    cmd,
+                    cwd=self.arclight_dir,
+                    stderr=subprocess.PIPE,
+                    timeout=300  # 5 minute timeout per batch
+                )
+                
+                if result.returncode == 0:
+                    indexed_count += len(existing_files)
+                    self.log.info(f'  Successfully indexed {len(existing_files)} creators')
+                else:
+                    failed_count += len(existing_files)
+                    self.log.error(f'  Traject failed with exit code {result.returncode}')
+                    if result.stderr:
+                        self.log.error(f'  STDERR: {result.stderr.decode("utf-8")}')
+                    
+            except subprocess.TimeoutExpired:
+                self.log.error(f'  Traject timed out for batch {batch_num}/{total_batches}')
+                failed_count += len(existing_files)
+            except Exception as e:
+                self.log.error(f'  Error indexing batch {batch_num}/{total_batches}: {e}')
+                failed_count += len(existing_files)
+
+        if failed_count > 0:
+            self.log.warning(f'Creator indexing completed with errors: {indexed_count} succeeded, {failed_count} failed')
+        
+        return indexed_count
+
 
     def get_repo_id(self, repo):
         """
@@ -704,37 +1196,47 @@ class ArcFlow:
             self.log.info(f'{indent}{e}')
             return False
 
+    def delete_arclight_solr_record(self, solr_record_id, indent_size=0):
+        try:
+            response = request.post(
+                f'{self.solr_url}/update?commit=true',
+                json={'delete': {'id': solr_record_id}},
+            )
+            if response.status_code == 200:
+                self.log.info(f'{indent}Deleted Solr record {solr_record_id}. from ArcLight Solr')
+                return True
+            else:
+                self.log.error(
+                    f'{indent}Failed to Solr record {solr_record_id} from Arclight Solr. Status code: {response.status_code}')
+                return False
+        except requests.exceptions.RequestException as e:
+            self.log.error(f'{indent}Error deleting Solr record {solr_record_id} from ArcLight Solr: {e}')
+
+    def delete_file(self, file_path, indent=0):
+        try:
+            os.remove(file_path)
+            self.log.info(f'{indent}Deleted file {file_path}.')
+        except FileNotFoundError:
+            self.log.error(f'{indent}File {file_path} not found.')
 
     def delete_ead(self, resource_id, ead_id, 
             xml_file_path, pdf_file_path, indent_size=0):
         indent = ' ' * indent_size
         # delete from solr
-        try:
-            response = requests.post(
-                f'{self.solr_url}/update?commit=true',
-                json={'delete': {'id': ead_id}},
-            )
-            if response.status_code == 200:
-                self.log.info(f'{indent}Deleted EAD "{ead_id}" from ArcLight Solr.')
-                # delete related files after suscessful deletion from solr
-                for file_path in (xml_file_path, pdf_file_path):
-                    try:
-                        os.remove(file_path)
-                        self.log.info(f'{indent}Deleted file {file_path}.')
-                    except FileNotFoundError:
-                        self.log.error(f'{indent}File {file_path} not found.')
+        deleted_solr_record = self.delete_arclight_solr_record(ead_id, indent_size=indent_size)
+        if deleted_solr_record:
+            self.delete_file(pdf_file_path, indent=indent)
+            self.delete_file(xml_file_path, indent=indent)
+            # delete symlink if exists
+            symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
+            self.delete_file(symlink_path, indent=indent)
 
-                # delete symlink if exists
-                symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
-                try:
-                    os.remove(symlink_path)
-                    self.log.info(f'{indent}Deleted symlink {symlink_path}.')
-                except FileNotFoundError:
-                    self.log.info(f'{indent}Symlink {symlink_path} not found.')
-            else:
-                self.log.error(f'{indent}Failed to delete EAD "{ead_id}" from Arclight Solr. Status code: {response.status_code}')
-        except requests.exceptions.RequestException as e:
-            self.log.error(f'{indent}Error deleting EAD "{ead_id}" from ArcLight Solr: {e}')
+    def delete_creator(self, file_path, solr_id, indent_size=0):
+        indent = ' ' * indent_size
+        deleted_solr_record = self.delete_arclight_solr_record(solr_id, indent_size=indent_size)
+        if deleted_solr_record:
+            self.delete_file(file_path, indent=indent)
+
 
 
     def save_config_file(self):
@@ -756,10 +1258,30 @@ class ArcFlow:
         Run the ArcFlow process.
         """
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
-        self.update_repositories()
-        self.update_eads()
+        
+        # Update repositories (unless agents-only mode)
+        if not self.agents_only:
+            self.update_repositories()
+        
+        # Update collections/EADs (unless agents-only mode)
+        if not self.agents_only:
+            self.update_eads()
+        
+        # Update creator records (unless collections-only mode)
+        if not self.collections_only:
+            self.process_creators()
+
+        # processing deleted resources is not needed when
+        # force-update is set or modified_since is set to 0
+        if self.force_update or int(self.last_updated.timestamp()) <= 0:
+            self.log.info('Skipping deleted record processing.')
+        else:
+            self.process_deleted_records()
+        
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
+
+    
 
 
 def main():
@@ -779,19 +1301,48 @@ def main():
     parser.add_argument(
         '--solr-url',
         required=True,
-        help='URL of the Solr core',)
+        help='URL of the ArcLight Solr core',)
+    parser.add_argument(
+        '--aspace-solr-url',
+        required=True,
+        help='URL of the ASpace Solr core',)
     parser.add_argument(
         '--traject-extra-config',
         default='',
         help='Path to extra Traject configuration file',)
+    parser.add_argument(
+        '--agents-only',
+        action='store_true',
+        help='Process only agent records, skip collections (for testing)',)
+    parser.add_argument(
+        '--collections-only',
+        action='store_true',
+        help='Process only repositories and collections, skip creator processing',)
+    parser.add_argument(
+        '--arcuit-dir',
+        default=None,
+        help='Path to arcuit repository (for traject config). If not provided, will try bundle show arcuit.',)
+    parser.add_argument(
+        '--skip-creator-indexing',
+        action='store_true',
+        help='Generate creator XML files but skip Solr indexing (for testing)',)
     args = parser.parse_args()
+    
+    # Validate mutually exclusive flags
+    if args.agents_only and args.collections_only:
+        parser.error('Cannot use both --agents-only and --collections-only')
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
+        aspace_solr_url=args.aspace_solr_url,
         traject_extra_config=args.traject_extra_config,
-        force_update=args.force_update)
+        force_update=args.force_update,
+        agents_only=args.agents_only,
+        collections_only=args.collections_only,
+        arcuit_dir=args.arcuit_dir,
+        skip_creator_indexing=args.skip_creator_indexing)
     arcflow.run()
 
 
