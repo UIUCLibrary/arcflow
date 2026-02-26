@@ -61,3 +61,8 @@ MANIFEST
 
 # PID files
 *.pid
+
+# Ruby/Bundler files
+Gemfile.lock
+.bundle/
+vendor/bundle/
