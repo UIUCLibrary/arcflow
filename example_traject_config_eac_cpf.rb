@@ -51,44 +51,27 @@ end
 #
 # ID FORMAT: Always use 'creator_{entity_type}_{id}' pattern
 # This matches the format used by arcflow when creating EAC-CPF files
+# We extract the ID from the filename only, as that's the source of truth
 to_field 'id' do |record, accumulator, context|
-  # Try 1: Extract from control/recordId (if present)
-  record_id = record.xpath('//eac:control/eac:recordId', EAC_NS).first
-  record_id ||= record.xpath('//control/recordId').first
-
-  if record_id && !record_id.text.strip.empty?
-    # Validate it matches expected pattern (creator_{type}_{id})
-    id_value = record_id.text.strip
-    if id_value =~ CREATOR_ID_PATTERN
-      accumulator << id_value
-      context.logger.info("Using recordId: #{id_value}")
-    else
-      context.logger.warn("recordId doesn't match expected pattern 'creator_{type}_{id}': #{id_value}")
-      # Fall through to try filename
-    end
-  end
-  
-  # Try 2: Extract from source filename if recordId not valid
+  # Extract from source filename - this is the only reliable source
   # Filename format: creator_{entity_type}_{id}.xml (e.g., creator_corporate_entities_584.xml)
-  if accumulator.empty?
-    source_file = context.source_record_id || context.input_name
-    if source_file
-      # Remove .xml extension and any path
-      id_from_filename = File.basename(source_file, '.xml')
-      # Validate it matches expected pattern
-      if id_from_filename =~ CREATOR_ID_PATTERN
-        accumulator << id_from_filename
-        context.logger.info("Using filename-based ID: #{id_from_filename}")
-      else
-        # Filename doesn't match expected pattern - skip record
-        context.logger.error("Filename doesn't match expected pattern 'creator_{type}_{id}': #{id_from_filename}")
-        context.skip!("Invalid ID format in filename")
-      end
+  source_file = context.source_record_id || context.input_name
+  if source_file
+    # Remove .xml extension and any path
+    id_from_filename = File.basename(source_file, '.xml')
+    # Validate it matches expected pattern
+    if id_from_filename =~ CREATOR_ID_PATTERN
+      accumulator << id_from_filename
+      context.logger.info("Using filename-based ID: #{id_from_filename}")
     else
-      # No filename available - skip record
-      context.logger.error("No source filename available for record")
-      context.skip!("Missing source filename")
+      # Filename doesn't match expected pattern - skip record
+      context.logger.error("Filename doesn't match expected pattern 'creator_{type}_{id}': #{id_from_filename}")
+      context.skip!("Invalid ID format in filename")
     end
+  else
+    # No filename available - skip record
+    context.logger.error("No source filename available for record")
+    context.skip!("Missing source filename")
   end
 end
 
