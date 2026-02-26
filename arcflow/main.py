@@ -603,7 +603,6 @@ class ArcFlow:
             cmd_string = ' '.join(cmd)
             result = subprocess.run(
                 cmd_string,
-                shell=True,
                 cwd=self.arclight_dir,
                 env=env,
                 stderr=subprocess.PIPE,
