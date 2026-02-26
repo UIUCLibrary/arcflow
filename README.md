@@ -137,7 +137,22 @@ This is a **one-time setup** per Solr instance.
 
 ---
 
-To index creator documents to Solr:
+### Traject Configuration for Creator Indexing
+
+The `traject_config_eac_cpf.rb` file defines how EAC-CPF creator records are mapped to Solr fields.
+
+**Search Order**: arcflow searches for the traject config following the collection records pattern:
+1. **arcuit_dir parameter** (if provided via `--arcuit-dir`) - Highest priority, most up-to-date user control
+2. **arcuit gem** (via `bundle show arcuit`) - For backward compatibility when arcuit_dir not provided
+3. **example_traject_config_eac_cpf.rb** in arcflow - Fallback for module usage without arcuit
+
+**Example File**: arcflow includes `example_traject_config_eac_cpf.rb` as a reference implementation. For production:
+- Copy this file to your arcuit gem as `traject_config_eac_cpf.rb`, or
+- Specify the location with `--arcuit-dir /path/to/arcuit`
+
+**Logging**: arcflow clearly logs which traject config file is being used when creator indexing runs.
+
+To index creator documents to Solr manually:
 
 ```bash
 bundle exec traject \
