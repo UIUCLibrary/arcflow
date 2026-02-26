@@ -562,60 +562,56 @@ class ArcFlow:
         """Index collection XML files to Solr using traject."""
         indent = ' ' * indent_size
         self.log.info(f'{indent}Indexing pending resources in repository ID {repo_id} to ArcLight Solr...')
-        try:
-            # Get arclight traject config path
-            result_show = subprocess.run(
-                ['bundle', 'show', 'arclight'],
-                capture_output=True,
-                text=True,
-                cwd=self.arclight_dir
-            )
-            arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
-            
-            if not arclight_path:
-                self.log.error(f'{indent}Could not find arclight gem path')
-                return
-            
-            traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
-            
-            cmd = [
-                'bundle', 'exec', 'traject',
-                '-u', self.solr_url,
-                '-s', 'processing_thread_pool=8',
-                '-s', 'solr_writer.thread_pool=8',
-                '-s', f'solr_writer.batch_size={self.batch_size}',
-                '-s', 'solr_writer.commit_on_close=true',
-                '-i', 'xml',
-                '-c', traject_config
-            ]
-            
-            if self.traject_extra_config:
-                if isinstance(self.traject_extra_config, (list, tuple)):
-                    cmd.extend(self.traject_extra_config)
-                else:
-                    # Treat a string extra config as a path and pass it with -c
-                    cmd.extend(['-c', self.traject_extra_config])
-            
-            cmd.append(xml_file_path)
-            
-            env = os.environ.copy()
-            env['REPOSITORY_ID'] = str(repo_id)
-            cmd_string = ' '.join(cmd)
-            result = subprocess.run(
-                cmd_string,
-                cwd=self.arclight_dir,
-                env=env,
-                stderr=subprocess.PIPE,
-            )
-
-            if result.stderr:
-                self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
-            if result.returncode != 0:
-                self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
+        # Get arclight traject config path
+        result_show = subprocess.run(
+            ['bundle', 'show', 'arclight'],
+            capture_output=True,
+            text=True,
+            cwd=self.arclight_dir
+        )
+        arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
+        
+        if not arclight_path:
+            self.log.error(f'{indent}Could not find arclight gem path')
+            return
+        
+        traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
+        
+        cmd = [
+            'bundle', 'exec', 'traject',
+            '-u', self.solr_url,
+            '-s', 'processing_thread_pool=8',
+            '-s', 'solr_writer.thread_pool=8',
+            '-s', f'solr_writer.batch_size={self.batch_size}',
+            '-s', 'solr_writer.commit_on_close=true',
+            '-i', 'xml',
+            '-c', traject_config
+        ]
+        
+        if self.traject_extra_config:
+            if isinstance(self.traject_extra_config, (list, tuple)):
+                cmd.extend(self.traject_extra_config)
             else:
-                self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
-        except subprocess.CalledProcessError as e:
-            self.log.error(f'{indent}Error indexing pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
+                # Treat a string extra config as a path and pass it with -c
+                cmd.extend(['-c', self.traject_extra_config])
+        
+        cmd.append(xml_file_path)
+        
+        env = os.environ.copy()
+        env['REPOSITORY_ID'] = str(repo_id)
+        result = subprocess.run(
+            cmd,
+            cwd=self.arclight_dir,
+            env=env,
+            stderr=subprocess.PIPE,
+        )
+
+        if result.stderr:
+            self.log.error(f'{indent}{result.stderr.decode("utf-8")}')
+        if result.returncode != 0:
+            self.log.error(f'{indent}Failed to index pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
+        else:
+            self.log.info(f'{indent}Finished indexing pending resources in repository ID {repo_id} to ArcLight Solr.')
 
 
     def get_creator_bioghist(self, resource, indent_size=0):
