@@ -749,6 +749,11 @@ class ArcFlow:
         """
         Validate a Solr query part to prevent injection attacks.
         
+        This validation protects against both shell command injection and 
+        Solr-specific query injection attacks. While the current code only uses
+        internally-controlled strings, this defense-in-depth approach prevents
+        future security issues if user-controlled data is added.
+        
         Args:
             query_part (str): A single query part to validate
             
@@ -763,17 +768,24 @@ class ArcFlow:
             return False
         
         # Check for suspicious patterns that could indicate injection attempts
-        # Allow standard Solr query syntax but reject obvious malicious patterns
+        # This includes both shell injection and Solr-specific patterns
         suspicious_patterns = [
-            r';\s*\w',  # Semicolon followed by word character (command injection)
-            r'\$\{',   # Variable interpolation attempts
-            r'`',      # Command substitution
-            r'\|\|',   # Shell command chaining (|| operator)
-            r'&&\s*[a-zA-Z]',  # Shell command chaining (but allow Solr AND operator)
+            # Shell/command injection patterns
+            r';\s*\w',          # Semicolon followed by word character
+            r'\$\{',            # Variable interpolation attempts (e.g., Log4Shell)
+            r'`',               # Command substitution
+            r'\|\|',            # Shell command chaining (|| operator)
+            r'&&\s*[a-zA-Z]',   # Shell command chaining (but allow Solr AND operator)
+            
+            # Solr-specific injection patterns
+            r'\{!',             # LocalParams injection attempts (e.g., {!type=xmlparser})
+            r'<script',         # XSS attempts
+            r'javascript:',     # JavaScript protocol handler
+            r'<\s*iframe',      # iframe injection
         ]
         
         for pattern in suspicious_patterns:
-            if re.search(pattern, query_part):
+            if re.search(pattern, query_part, re.IGNORECASE):
                 self.log.error(f"Rejected suspicious query part: {query_part}")
                 return False
         
