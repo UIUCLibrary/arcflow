@@ -88,6 +88,7 @@ def sample_agent():
     }
 
 
+
 @pytest.fixture
 def sample_agent_with_bioghist():
     """Sample agent with biographical/historical note."""
@@ -146,7 +147,48 @@ def sample_ead_xml_with_dots():
   </eadheader>
 </ead>'''
 
-
+@pytest.fixture
+def sample_eac_cpf_xml():
+    """Minimal valid EAC-CPF XML for testing"""
+    return '''<?xml version="1.0" encoding="UTF-8"?>
+<eac-cpf xmlns="urn:isbn:1-931666-33-4">
+  <control>
+    <recordId>creator_people_1</recordId>
+    <maintenanceStatus>new</maintenanceStatus>
+    <maintenanceAgency>
+      <agencyName>Test</agencyName>
+    </maintenanceAgency>
+  </control>
+  <cpfDescription>
+    <identity>
+      <nameEntry>
+        <part>Test Person</part>
+      </nameEntry>
+    </identity>
+  </cpfDescription>
+</eac-cpf>'''
+  
+@pytest.fixture
+def sample_eac_cpf_xml():
+    """Minimal valid EAC-CPF XML for testing"""
+    return '''<?xml version="1.0" encoding="UTF-8"?>
+<eac-cpf xmlns="urn:isbn:1-931666-33-4">
+  <control>
+    <recordId>creator_people_1</recordId>
+    <maintenanceStatus>new</maintenanceStatus>
+    <maintenanceAgency>
+      <agencyName>Test</agencyName>
+    </maintenanceAgency>
+  </control>
+  <cpfDescription>
+    <identity>
+      <nameEntry>
+        <part>Test Person</part>
+      </nameEntry>
+    </identity>
+  </cpfDescription>
+</eac-cpf>'''
+  
 @pytest.fixture
 def mock_subprocess_result():
     """Mock subprocess result for testing subprocess calls."""
