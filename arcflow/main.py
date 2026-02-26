@@ -1197,6 +1197,8 @@ class ArcFlow:
             return False
 
     def delete_arclight_solr_record(self, solr_record_id, indent_size=0):
+        indent = ' ' * indent_size
+
         try:
             response = requests.post(
                 f'{self.solr_url}/update?commit=true',
@@ -1212,7 +1214,9 @@ class ArcFlow:
         except requests.exceptions.RequestException as e:
             self.log.error(f'{indent}Error deleting Solr record {solr_record_id} from ArcLight Solr: {e}')
 
-    def delete_file(self, file_path, indent=0):
+    def delete_file(self, file_path, indent_side=0):
+        indent = ' ' * indent_size
+
         try:
             os.remove(file_path)
             self.log.info(f'{indent}Deleted file {file_path}.')
