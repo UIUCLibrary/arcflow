@@ -2,30 +2,34 @@
 
 Quick reference for common tasks when working with local Solr.
 
+**Note:** This guide uses `docker compose` (Docker Compose v2). If you have Docker Compose v1, use `docker-compose` (with a dash) instead.
+
 ## Setup
 
 ```bash
-# Automated setup (recommended)
+# Automated setup (recommended - supports both docker-compose and docker compose)
 ./scripts/setup-local-solr.sh
 
 # Manual setup
-docker-compose up -d
+docker compose up -d
+# OR for Docker Compose v1:
+# docker-compose up -d
 ```
 
 ## Daily Usage
 
 ```bash
 # Start Solr
-docker-compose up -d
+docker compose up -d
 
 # Stop Solr
-docker-compose down
+docker compose down
 
 # View logs
-docker-compose logs -f solr
+docker compose logs -f solr
 
 # Restart Solr
-docker-compose restart solr
+docker compose restart solr
 ```
 
 ## Accessing Solr
@@ -59,9 +63,9 @@ curl "http://localhost:8983/solr/arclight/update?commit=true" \
 curl "http://localhost:8983/solr/arclight/select?q=*:*&rows=0" | jq '.response.numFound'
 
 # Complete reset (removes all data)
-docker-compose down
+docker compose down
 docker volume rm arcflow_solr-data
-docker-compose up -d
+docker compose up -d
 ```
 
 ## Cloning from Remote
@@ -83,10 +87,10 @@ curl "http://localhost:8984/solr/arclight/select?q=*:*&rows=10000&wt=json" > /tm
 curl http://localhost:8983/solr/admin/cores?action=STATUS
 
 # Check container status
-docker-compose ps
+docker compose ps
 
 # View detailed logs
-docker-compose logs --tail=100 solr
+docker compose logs --tail=100 solr
 
 # Recreate core manually
 docker exec arclight-solr solr create_core -c arclight -d /opt/solr-config

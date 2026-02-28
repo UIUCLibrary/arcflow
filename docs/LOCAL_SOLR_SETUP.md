@@ -5,6 +5,8 @@ This guide walks you through setting up a local Docker-based ArcLight Solr insta
 ## Prerequisites
 
 - Docker and Docker Compose installed on your local machine
+  - For Docker Compose v2 (recommended), use `docker compose` commands
+  - For Docker Compose v1, use `docker-compose` commands with a dash
 - SSH access to the remote archivesspace-dev.library.illinois.edu server
 - `jq` command-line tool (for JSON processing) - install with `brew install jq` on macOS or `apt-get install jq` on Linux
 
@@ -79,7 +81,9 @@ cd ../..
 From the arcflow directory:
 
 ```bash
-docker-compose up -d
+docker compose up -d
+# OR for Docker Compose v1:
+# docker compose up -d
 ```
 
 This will:
@@ -152,14 +156,14 @@ scp -r archivesspace-dev.library.illinois.edu:/tmp/solr-backup /tmp/solr-backup
 
 # Restore to local Solr
 # First, stop the local Solr container
-docker-compose down
+docker compose down
 
 # Copy backup to Solr volume
 docker run --rm -v arcflow_solr-data:/data -v /tmp/solr-backup:/backup \
   alpine cp -r /backup/snapshot.arclight-backup /data/data/arclight/data/
 
 # Restart Solr
-docker-compose up -d
+docker compose up -d
 ```
 
 ### 4. Configure arcflow to Use Local Solr
@@ -189,7 +193,7 @@ Open your browser to: http://localhost:8983/solr/
 ### View Logs
 
 ```bash
-docker-compose logs -f solr
+docker compose logs -f solr
 ```
 
 ### Clear All Data and Start Fresh
@@ -205,19 +209,19 @@ curl "http://localhost:8983/solr/arclight/update?commit=true" \
 
 ```bash
 # Stop and remove containers
-docker-compose down
+docker compose down
 
 # Remove the volume to delete all data
 docker volume rm arcflow_solr-data
 
 # Start fresh
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Stop the Local Solr
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ## Troubleshooting
@@ -249,7 +253,7 @@ If you need to update the Solr configuration:
 1. Update files in `solr-config/`
 2. Restart Solr:
    ```bash
-   docker-compose restart solr
+   docker compose restart solr
    ```
 
 Or reload the core:
@@ -262,12 +266,12 @@ curl "http://localhost:8983/solr/admin/cores?action=RELOAD&core=arclight"
 
 Recommended workflow for testing indexing:
 
-1. Start local Solr: `docker-compose up -d`
+1. Start local Solr: `docker compose up -d`
 2. Configure arcflow to use local Solr
 3. Run your indexing tests
 4. Check results in Solr admin UI: http://localhost:8983/solr/
 5. If something breaks, clear data and try again
-6. When done, stop Solr: `docker-compose down`
+6. When done, stop Solr: `docker compose down`
 
 ## Integration with Existing Development Setup
 

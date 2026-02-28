@@ -16,6 +16,15 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Determine which docker compose command to use
+if command_exists docker-compose; then
+    COMPOSE_CMD="docker-compose"
+elif docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+else
+    COMPOSE_CMD=""
+fi
+
 # Check prerequisites
 echo "Checking prerequisites..."
 if ! command_exists docker; then
@@ -23,12 +32,12 @@ if ! command_exists docker; then
     exit 1
 fi
 
-if ! command_exists docker-compose; then
+if [ -z "$COMPOSE_CMD" ]; then
     echo "ERROR: Docker Compose is not installed. Please install Docker Compose first."
     exit 1
 fi
 
-echo "✓ Docker and Docker Compose are installed"
+echo "✓ Docker and Docker Compose are installed (using: $COMPOSE_CMD)"
 echo ""
 
 # Check if solr-config already exists
@@ -138,15 +147,15 @@ fi
 echo "Starting local Solr instance..."
 cd "$ARCFLOW_DIR"
 
-if docker-compose ps | grep -q "arclight-solr"; then
+if $COMPOSE_CMD ps 2>/dev/null | grep -q "arclight-solr"; then
     echo "Solr container is already running."
     read -p "Do you want to restart it? (y/n): " restart
     if [ "$restart" = "y" ] || [ "$restart" = "Y" ]; then
-        docker-compose restart solr
+        $COMPOSE_CMD restart solr
         echo "✓ Solr restarted"
     fi
 else
-    docker-compose up -d
+    $COMPOSE_CMD up -d
     echo "✓ Solr container started"
 fi
 
@@ -168,7 +177,7 @@ done
 if [ $attempt -eq $max_attempts ]; then
     echo ""
     echo "WARNING: Solr did not become ready within expected time. Check logs with:"
-    echo "  docker-compose logs solr"
+    echo "  $COMPOSE_CMD logs solr"
     exit 1
 fi
 
@@ -181,10 +190,10 @@ echo "To use with arcflow:"
 echo "  python arcflow/main.py --solr-url http://localhost:8983/solr/arclight ..."
 echo ""
 echo "To view logs:"
-echo "  docker-compose logs -f solr"
+echo "  $COMPOSE_CMD logs -f solr"
 echo ""
 echo "To stop Solr:"
-echo "  docker-compose down"
+echo "  $COMPOSE_CMD down"
 echo ""
 echo "To clone data from remote Solr, see: docs/LOCAL_SOLR_SETUP.md"
 echo ""
