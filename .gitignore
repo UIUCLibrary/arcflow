@@ -61,3 +61,6 @@ MANIFEST
 
 # PID files
 *.pid
+
+# Local Solr configuration (can vary by environment)
+solr-config/

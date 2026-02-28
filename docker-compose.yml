@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  solr:
+    image: solr:8.11.2
+    container_name: arclight-solr
+    ports:
+      - "8983:8983"
+    volumes:
+      - solr-data:/var/solr
+      - ./solr-config:/opt/solr-config:ro
+    environment:
+      - SOLR_HEAP=1g
+    command:
+      - solr-precreate
+      - arclight
+      - /opt/solr-config
+    networks:
+      - arclight-network
+
+  # Optional: Include if you want to run ArchivesSpace locally too
+  # archivesspace:
+  #   image: archivesspace/archivesspace:latest
+  #   container_name: arclight-archivesspace
+  #   ports:
+  #     - "8080:8080"
+  #     - "8089:8089"
+  #     - "8090:8090"
+  #   volumes:
+  #     - aspace-data:/archivesspace/data
+  #   networks:
+  #     - arclight-network
+
+volumes:
+  solr-data:
+    driver: local
+  # aspace-data:
+  #   driver: local
+
+networks:
+  arclight-network:
+    driver: bridge
