@@ -64,3 +64,6 @@ MANIFEST
 
 # Local Solr configuration (can vary by environment)
 solr-config/
+
+# Environment configuration
+.env
