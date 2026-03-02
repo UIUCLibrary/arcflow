@@ -64,13 +64,13 @@ to_field 'is_creator' do |record, accumulator|
   accumulator << 'true'
 end
 
-# Record type
-to_field 'record_type' do |record, accumulator|
-  accumulator << 'creator'
-end
+# # Record type
+# to_field 'record_type' do |record, accumulator|
+#   accumulator << 'creator'
+# end
 
 # Entity type (corporateBody, person, family)
-to_field 'entity_type' do |record, accumulator|
+to_field 'entity_type_ssi' do |record, accumulator|
   entity = record.xpath('//eac:cpfDescription/eac:identity/eac:entityType', EAC_NS).first
   accumulator << entity.text if entity
 end
@@ -198,7 +198,7 @@ to_field 'relationship_types_ssim' do |record, accumulator|
 end
 
 # Agent source URI (from original ArchivesSpace)
-to_field 'agent_uri' do |record, accumulator|
+to_field 'agent_uri_ssi' do |record, accumulator|
   # Try to extract from control section or otherRecordId
   other_id = record.xpath('//eac:control/eac:otherRecordId[@localType="archivesspace_uri"]', EAC_NS).first
   if other_id
@@ -211,10 +211,10 @@ to_field 'timestamp' do |record, accumulator|
   accumulator << Time.now.utc.iso8601
 end
 
-# Document type marker
-to_field 'document_type' do |record, accumulator|
-  accumulator << 'creator'
-end
+# # Document type marker
+# to_field 'document_type' do |record, accumulator|
+#   accumulator << 'creator'
+# end
 
 # Log successful indexing
 each_record do |record, context|
