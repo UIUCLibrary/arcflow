@@ -25,6 +25,9 @@ EAC_NS = { 'eac' => 'urn:isbn:1-931666-33-4' }
 # Pattern matching arcflow's creator file naming: creator_{entity_type}_{id}
 CREATOR_ID_PATTERN = /^creator_(corporate_entities|people|families)_\d+$/
 
+# Entity types - SINGLE SOURCE OF TRUTH
+ENTITY_TYPES = ['corporate_entities', 'people', 'families']
+
 settings do
   provide "solr.url", ENV['SOLR_URL'] || "http://localhost:8983/solr/blacklight-core"
   provide "solr_writer.commit_on_close", "true"
@@ -160,26 +163,25 @@ to_field 'text' do |record, accumulator|
   accumulator << bioghist.map(&:text).join(' ') if bioghist.any?
 end
 
-# Related agents (from cpfRelation elements)
-to_field 'related_agents_ssim' do |record, accumulator|
+# Related agents (from cpfRelation elements) for display parsing and debugging, stored as a single line
+# 	"https://archivesspace-stage.library.illinois.edu/agents/corporate_entities/57|associative"
+to_field 'related_agents_debug_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
-    # Get the related entity href/identifier
     href = rel['href'] || rel['xlink:href']
     relation_type = rel['cpfRelationType']
-    
+
     if href
-      # Store as: "uri|type" for easy parsing later
-      accumulator << "#{href}|#{relation_type}"
-    elsif relation_entry = rel.xpath('eac:relationEntry', EAC_NS).first
-      # If no href, at least store the name
-      name = relation_entry.text
-      accumulator << "#{name}|#{relation_type}" if name
+      solr_id = aspace_uri_to_solr_id(href)
+      if solr_id
+        # Format: "solr_id|type"
+        accumulator << "#{solr_id}|#{relation_type || 'unknown'}"
+      end
     end
   end
 end
 
-# Related agents - just URIs (for simpler queries)
+# Related agents - ASpace URIs, in parallel array to match ids and types
 to_field 'related_agent_uris_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
@@ -188,7 +190,31 @@ to_field 'related_agent_uris_ssim' do |record, accumulator|
   end
 end
 
-# Relationship types
+# Related agents - Parallel array of relationship ids to match relationship types and uris
+to_field 'related_agent_ids_ssim' do |record, accumulator|
+  relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
+  relations.each do |rel|
+    href = rel['href'] || rel['xlink:href']
+    if href
+      solr_id = aspace_uri_to_solr_id(href)  # CONVERT URI TO ID
+      accumulator << solr_id if solr_id
+    end
+  end
+end
+
+# Related Agents - Parallel array of relationship types to match relationship ids and uris
+to_field 'related_agent_relationship_types_ssim' do |record, accumulator|
+  relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
+  relations.each do |rel|
+    href = rel['href'] || rel['xlink:href']
+    if href
+      relation_type = rel['cpfRelationType'] || 'unknown'
+      accumulator << relation_type  # NO deduplication - keeps array parallel
+    end
+  end
+end
+
+# Relationship types used for faceting,
 to_field 'relationship_types_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
@@ -221,5 +247,29 @@ each_record do |record, context|
   record_id = record.xpath('//eac:control/eac:recordId', EAC_NS).first
   if record_id
     context.logger.info("Indexed creator: #{record_id.text}")
+  end
+end
+
+
+
+
+# Pattern matching arcflow's creator file naming: creator_{entity_type}_{id}
+CREATOR_ID_PATTERN = /^creator_(#{ENTITY_TYPES.join('|')})_\d+$/
+
+# Helper to build and validate creator IDs
+def build_creator_id(entity_type, id_number)
+  creator_id = "creator_#{entity_type}_#{id_number}"
+  unless creator_id =~ CREATOR_ID_PATTERN
+    raise ArgumentError, "Invalid creator ID: #{creator_id} doesn't match pattern"
+  end
+  creator_id
+end
+
+# Helper to convert ArchivesSpace URI to Solr creator ID
+def aspace_uri_to_solr_id(uri)
+  return nil unless uri
+  # Match: /agents/{type}/{id} or https://.../agents/{type}/{id}
+  if uri =~ /agents\/(#{ENTITY_TYPES.join('|')})\/(\d+)/
+    build_creator_id($1, $2)
   end
 end
