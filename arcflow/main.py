@@ -701,16 +701,11 @@ class ArcFlow:
         Defines the Solr query criteria for "target" agents.
         These are agents we want to process.
         """
-        # Basic filters for agents to include
         criteria = [
+            "linked_agent_roles:creator",
             "system_generated:false",
             "is_user:false",
-            "is_repo_agent:false",
-            # Include agents that are creators OR are linked to published records
-            "(linked_agent_roles:creator OR is_linked_to_published_record:true)",
-            # Exclude agents whose ONLY role is 'donor'
-            # This logic says: "NOT (role is only donor)"
-            "(*:* -linked_agent_roles:donor OR (*:* AND linked_agent_roles:[* TO *] AND (*:* -linked_agent_roles:donor)))"
+#             "is_repo_agent:false",
         ]
 
         # Add time filter if applicable
@@ -727,11 +722,10 @@ class ArcFlow:
         """
         # The core logic for what makes an agent a "target"
         target_logic = " AND ".join([
+            "linked_agent_roles:creator",
             "system_generated:false",
             "is_user:false",
-            "is_repo_agent:false",
-            "(linked_agent_roles:creator OR is_linked_to_published_record:true)",
-            "(*:* -linked_agent_roles:donor OR (*:* AND linked_agent_roles:[* TO *] AND (*:* -linked_agent_roles:donor)))"
+#             "is_repo_agent:false",
         ])
 
         # We find non-targets by negating the entire block of target logic
