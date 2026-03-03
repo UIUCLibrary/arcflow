@@ -10,6 +10,7 @@ import re
 import logging
 import math
 import sys
+import concurrent.futures
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
 from xml.etree import ElementTree as ET
@@ -1255,12 +1256,30 @@ class ArcFlow:
         if not self.agents_only:
             self.update_repositories()
         
-        # Update collections/EADs (unless agents-only mode)
-        if not self.agents_only:
-            self.update_eads()
+        # Determine what needs to run
+        needs_collections = not self.agents_only
+        needs_creators = not self.collections_only
         
-        # Update creator records (unless collections-only mode)
-        if not self.collections_only:
+        if needs_collections and needs_creators:
+            # Run both in parallel using ThreadPoolExecutor
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                self.log.info('Running collections and creators in parallel...')
+                
+                collections_future = executor.submit(self.update_eads)
+                creators_future = executor.submit(self.process_creators)
+                
+                # Wait for both to complete
+                concurrent.futures.wait([collections_future, creators_future])
+                
+                # Check for exceptions
+                if collections_future.exception():
+                    self.log.error(f'Collections processing failed: {collections_future.exception()}')
+                if creators_future.exception():
+                    self.log.error(f'Creator processing failed: {creators_future.exception()}')
+                    
+        elif needs_collections:
+            self.update_eads()
+        elif needs_creators:
             self.process_creators()
 
         # processing deleted resources is not needed when
