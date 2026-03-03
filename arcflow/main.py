@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
 from utils.stage_classifications import extract_labels
-
+import glob
 
 base_dir = os.path.abspath((__file__) + "/../../")
 log_file = os.path.join(base_dir, 'logs/arcflow.log')
@@ -577,7 +577,7 @@ class ArcFlow:
                 return
             
             traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
-            
+            xml_files = glob.glob(xml_file_path)  # Returns list of matching files
             cmd = [
                 'bundle', 'exec', 'traject',
                 '-u', self.solr_url,
@@ -586,8 +586,8 @@ class ArcFlow:
                 '-s', f'solr_writer.batch_size={self.batch_size}',
                 '-s', 'solr_writer.commit_on_close=true',
                 '-i', 'xml',
-                '-c', traject_config
-            ]
+                '-c', traject_config,
+            ] + xml_files
             
             if self.traject_extra_config:
                 if isinstance(self.traject_extra_config, (list, tuple)):
@@ -595,14 +595,11 @@ class ArcFlow:
                 else:
                     # Treat a string extra config as a path and pass it with -c
                     cmd.extend(['-c', self.traject_extra_config])
-            
-            cmd.append(xml_file_path)
-            
+
             env = os.environ.copy()
             env['REPOSITORY_ID'] = str(repo_id)
-            cmd_string = ' '.join(cmd)
             result = subprocess.run(
-                cmd_string,
+                cmd,
                 cwd=self.arclight_dir,
                 env=env,
                 stderr=subprocess.PIPE,
