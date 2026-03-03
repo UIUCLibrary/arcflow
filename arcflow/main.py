@@ -70,8 +70,13 @@ class ArcFlow:
             with open(self.arcflow_file_path, 'r') as file:
                 config = yaml.safe_load(file)
             try:
-                self.last_updated = datetime.strptime(
-                    config['last_updated'], '%Y-%m-%dT%H:%M:%S%z')
+                date_fmt = '%Y-%m-%dT%H:%M:%S%z'
+                epoch = datetime.fromtimestamp(0, timezone.utc)
+                legacy_ts = config.get('last_updated')
+                collections_ts_str = config.get('last_updated_collections') or legacy_ts
+                creators_ts_str = config.get('last_updated_creators') or legacy_ts
+                self.last_updated_collections = datetime.strptime(collections_ts_str, date_fmt) if collections_ts_str else epoch
+                self.last_updated_creators = datetime.strptime(creators_ts_str, date_fmt) if creators_ts_str else epoch
             except Exception as e:
                 self.log.error(f'Error parsing last_updated date on file .arcflow.yml: {e}')
                 exit(0)
@@ -80,7 +85,8 @@ class ArcFlow:
                 self.log.error('File .arcflow.yml not found. Create the file and try again or run with --force-update to recreate EADs from scratch.')
                 exit(0)
             else:
-                self.last_updated = datetime.fromtimestamp(0, timezone.utc)
+                self.last_updated_collections = datetime.fromtimestamp(0, timezone.utc)
+                self.last_updated_creators = datetime.fromtimestamp(0, timezone.utc)
         try:
             with open(os.path.join(base_dir, '.archivessnake.yml'), 'r') as file:
                 config = yaml.safe_load(file)
@@ -139,10 +145,10 @@ class ArcFlow:
             for repo in repos:
                 # python doesn't support Zulu timezone suffixes, 
                 # converting system_mtime and user_mtime to UTC offset notation
-                if (self.last_updated <= datetime.strptime(
+                if (self.last_updated_collections <= datetime.strptime(
                         repo['system_mtime'].replace('Z','+0000'),
                         '%Y-%m-%dT%H:%M:%S%z')
-                        or self.last_updated <= datetime.strptime(
+                        or self.last_updated_collections <= datetime.strptime(
                         repo['user_mtime'].replace('Z','+0000'),
                         '%Y-%m-%dT%H:%M:%S%z')):
                     update_repos = True
@@ -310,6 +316,7 @@ class ArcFlow:
                     f'{pdf_dir}/{prev_ead_id}.pdf', 
                     indent_size=indent_size)
 
+            os.makedirs(xml_dir, exist_ok=True)
             self.save_file(xml_file_path, xml_content, 'XML', indent_size=indent_size)
             self.create_symlink(
                 os.path.basename(xml_file_path),
@@ -385,6 +392,7 @@ class ArcFlow:
                 else:
                     pdf_content = b''   # empty PDF file
 
+                os.makedirs(pdf_dir, exist_ok=True)
                 self.save_file(
                     f'{pdf_dir}/{ead_id}.pdf', 
                     pdf_content, 
@@ -407,7 +415,7 @@ class ArcFlow:
         resource_dir = f'{xml_dir}/resources'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        modified_since = int(self.last_updated.timestamp())
+        modified_since = int(self.last_updated_collections.timestamp())
 
         if self.force_update or modified_since <= 0:
             modified_since = 0
@@ -487,7 +495,15 @@ class ArcFlow:
         resource_dir = f'{xml_dir}/resources'
         agent_dir = f'{xml_dir}/agents'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
-        modified_since = int(self.last_updated.timestamp())
+        # Use per-type timestamps; for mixed runs use the earlier of the two
+        # so no deletions are missed. Per-type filtering happens below.
+        if not self.agents_only and not self.collections_only:
+            modified_since = min(int(self.last_updated_collections.timestamp()),
+                                 int(self.last_updated_creators.timestamp()))
+        elif not self.agents_only:
+            modified_since = int(self.last_updated_collections.timestamp())
+        else:
+            modified_since = int(self.last_updated_creators.timestamp())
 
         # process records that have been deleted since last update in ArchivesSpace
         resource_pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<record_id>\d+)$'
@@ -879,7 +895,7 @@ class ArcFlow:
 
         xml_dir = f'{self.arclight_dir}/public/xml'
         agents_dir = f'{xml_dir}/agents'
-        modified_since = int(self.last_updated.timestamp())
+        modified_since = int(self.last_updated_creators.timestamp())
         indent_size = 0
         indent = ' ' * indent_size
 
@@ -1208,13 +1224,25 @@ class ArcFlow:
 
     def save_config_file(self):
         """
-        Save the last updated timestamp to the .arcflow.yml file.
+        Save the last updated timestamps to the .arcflow.yml file.
+        Each record type (collections, creators) has its own timestamp so they
+        can be run independently without overwriting each other's state.
         """
         try:
+            # Preserve timestamps for record types not processed in this run
+            try:
+                with open(self.arcflow_file_path, 'r') as file:
+                    config = yaml.safe_load(file) or {}
+            except FileNotFoundError:
+                config = {}
+            config.pop('last_updated', None)  # remove legacy single key if present
+            now = datetime.fromtimestamp(self.start_time, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S%z')
+            if not self.agents_only:
+                config['last_updated_collections'] = now
+            if not self.collections_only:
+                config['last_updated_creators'] = now
             with open(self.arcflow_file_path, 'w') as file:
-                yaml.dump({
-                    'last_updated': datetime.fromtimestamp(self.start_time, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S%z')
-                }, file)
+                yaml.dump(config, file)
                 self.log.info(f'Saved file .arcflow.yml.')
         except Exception as e:
             self.log.error(f'Error writing to file .arcflow.yml: {e}')
@@ -1242,7 +1270,7 @@ class ArcFlow:
         agents_dir = f'{xml_dir}/agents'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        if needs_collections and (self.force_update or int(self.last_updated.timestamp()) <= 0):
+        if needs_collections and (self.force_update or int(self.last_updated_collections.timestamp()) <= 0):
             # Delete all EADs and Creators from Solr, then wipe output directories.
             # Only triggered when collections are being processed, since the Solr
             # delete covers all record types and directory teardown covers xml_dir.
@@ -1294,9 +1322,14 @@ class ArcFlow:
         elif needs_creators:
             self.process_creators()
 
-        # processing deleted resources is not needed when
-        # force-update is set or modified_since is set to 0
-        if self.force_update or int(self.last_updated.timestamp()) <= 0:
+        # Skip deleted record processing on force_update or if all active
+        # timestamps indicate a first run (nothing has been indexed yet).
+        active_timestamps = []
+        if needs_collections:
+            active_timestamps.append(int(self.last_updated_collections.timestamp()))
+        if needs_creators:
+            active_timestamps.append(int(self.last_updated_creators.timestamp()))
+        if self.force_update or all(t <= 0 for t in active_timestamps):
             self.log.info('Skipping deleted record processing.')
         else:
             self.process_deleted_records()
