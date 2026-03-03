@@ -16,8 +16,8 @@ from xml.etree import ElementTree as ET
 from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
-from .utils.stage_classifications import extract_labels
-
+from utils.stage_classifications import extract_labels
+import glob
 
 base_dir = os.path.abspath((__file__) + "/../../")
 log_file = os.path.join(base_dir, 'logs/arcflow.log')
@@ -40,8 +40,9 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False, pdf_timeout_queued=300, pdf_timeout_running=1800):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False, pdf_timeout_queued=300, pdf_timeout_running=1800):
         self.solr_url = solr_url
+        self.aspace_solr_url = aspace_solr_url
         self.batch_size = 1000
         clean_extra_config = traject_extra_config.strip()
         self.traject_extra_config = clean_extra_config or None
@@ -49,6 +50,10 @@ class ArcFlow:
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
         self.force_update = force_update
+        self.agents_only = agents_only
+        self.collections_only = collections_only
+        self.arcuit_dir = arcuit_dir
+        self.skip_creator_indexing = skip_creator_indexing
         self.agents_only = agents_only
         self.collections_only = collections_only
         self.arcuit_dir = arcuit_dir
@@ -219,6 +224,9 @@ class ArcFlow:
                 'resolve': ['classifications', 'classification_terms', 'linked_agents'],
             }).json()
 
+        if "ead_id" not in resource:
+            self.log.error(f'{indent}Resource {resource_id} is missing an ead_id. Skipping.')
+            return pdf_job
         xml_file_path = f'{xml_dir}/{resource["ead_id"]}.xml'
 
         # replace dots with dashes in EAD ID to avoid issues with Solr
@@ -241,23 +249,23 @@ class ArcFlow:
             if xml.content:
                 xml_content = xml.content.decode('utf-8')
                 insert_pos = xml_content.find('<archdesc level="collection">')
-                
+
                 if insert_pos != -1:
                     # Find the position after the closing </did> tag
                     did_end_pos = xml_content.find('</did>', insert_pos)
-                    
+
                     if did_end_pos != -1:
                         # Move to after the </did> tag
                         did_end_pos += len('</did>')
                         extra_xml = ''
-                        
+
                         # Add record group and subgroup labels
                         rg_label, sg_label = extract_labels(resource)[1:3]
                         if rg_label:
                             extra_xml += f'\n<recordgroup>{xml_escape(rg_label)}</recordgroup>'
                             if sg_label:
                                 extra_xml += f'\n<subgroup>{xml_escape(sg_label)}</subgroup>'
-                        
+
                         # Handle biographical/historical notes from creator agents
                         bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
                         if bioghist_content:
@@ -265,26 +273,26 @@ class ArcFlow:
                             # Search for existing bioghist after </did> but before </archdesc>
                             archdesc_end = xml_content.find('</archdesc>', did_end_pos)
                             search_section = xml_content[did_end_pos:archdesc_end] if archdesc_end != -1 else xml_content[did_end_pos:]
-                            
+
                             # Look for closing </bioghist> tag
                             existing_bioghist_end = search_section.rfind('</bioghist>')
-                            
+
                             if existing_bioghist_end != -1:
                                 # Found existing bioghist - insert agent elements INSIDE it (before closing tag)
                                 insert_pos = did_end_pos + existing_bioghist_end
-                                xml_content = (xml_content[:insert_pos] + 
-                                    f'\n{bioghist_content}\n' + 
+                                xml_content = (xml_content[:insert_pos] +
+                                    f'\n{bioghist_content}\n' +
                                     xml_content[insert_pos:])
                             else:
                                 # No existing bioghist - wrap agent elements in parent container
                                 wrapped_content = f'<bioghist>\n{bioghist_content}\n</bioghist>'
                                 extra_xml += f'\n{wrapped_content}'
-                        
+
                         if extra_xml:
-                            xml_content = (xml_content[:did_end_pos] + 
-                                extra_xml + 
+                            xml_content = (xml_content[:did_end_pos] +
+                                extra_xml +
                                 xml_content[did_end_pos:])
-                
+
                 xml_content = xml_content.encode('utf-8')
             else:
                 xml_content = xml.content
@@ -351,18 +359,18 @@ class ArcFlow:
     def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir, indent_size=0):
         """
         Wait for an ArchivesSpace PDF generation job to complete and save the result.
-        
+
         Uses a two-phase timeout approach:
         - Phase 1 (queued): Short timeout to detect if background processor isn't running
         - Phase 2 (running): Longer timeout to allow large PDFs to complete
-        
+
         Args:
             repo_uri: Repository URI
             job_id: Job ID in ArchivesSpace
             ead_id: EAD identifier for the resource
             pdf_dir: Directory to save PDF files
             indent_size: Indentation level for logging
-            
+
         Returns:
             True if successful, False if timeout or job failed
         """
@@ -372,19 +380,19 @@ class ArcFlow:
         warning_threshold = 60  # warn if queued for more than 1 minute
         last_warning_time = 0
         poll_count = 0
-        
+
         # Track status transitions for smart timeout
         status_start_times = {}  # Track when each status began
         current_timeout = self.pdf_timeout_queued  # Start with queued timeout
-        
+
         while True:
             elapsed_time = time.time() - start_time
-            
+
             # Check for timeout (with appropriate timeout for current status)
             if elapsed_time > current_timeout:
                 # Determine which phase timed out for appropriate error message
                 last_status = list(status_start_times.keys())[-1] if status_start_times else 'queued'
-                
+
                 if last_status == 'queued':
                     self.log.error(
                         f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
@@ -404,7 +412,7 @@ class ArcFlow:
                         f'{indent}Consider increasing timeout with: --pdf-timeout-running {int(current_timeout * 2)}\n'
                         f'{indent}Continuing without PDF for "{ead_id}"...'
                     )
-                
+
                 # Create empty PDF file and continue
                 self.save_file(
                     f'{pdf_dir}/{ead_id}.pdf',
@@ -412,7 +420,7 @@ class ArcFlow:
                     'PDF (empty - job timed out)',
                     indent_size=indent_size)
                 return False
-            
+
             try:
                 job_status = self.client.get(
                     f'{repo_uri}/jobs/{job_id}').json()['status']
@@ -420,11 +428,11 @@ class ArcFlow:
                 self.log.error(f'{indent}Error checking job status for {self.job_type}_{job_id}: {e}')
                 time.sleep(poll_interval)
                 continue
-            
+
             # Track status transitions and adjust timeout accordingly
             if job_status not in status_start_times:
                 status_start_times[job_status] = time.time()
-                
+
                 # When job transitions from queued to running, switch to running timeout
                 if job_status == 'running' and 'queued' in status_start_times:
                     time_in_queued = status_start_times[job_status] - status_start_times['queued']
@@ -488,7 +496,7 @@ class ArcFlow:
                         f'This may indicate the ArchivesSpace background job processor is not running.'
                     )
                     last_warning_time = elapsed_time
-                
+
                 # Only log every 4th poll (every 20 seconds) to reduce log spam
                 if poll_count % 4 == 0:
                     self.log.info(
@@ -501,7 +509,7 @@ class ArcFlow:
                     f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} '
                     f'(status: {job_status}, elapsed: {int(elapsed_time)}s)'
                 )
-            
+
             time.sleep(poll_interval)
 
 
@@ -511,10 +519,11 @@ class ArcFlow:
         ArchivesSpace.
         """
         xml_dir = f'{self.arclight_dir}/public/xml'
+        resource_dir = f'{xml_dir}/resources'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
         modified_since = int(self.last_updated.timestamp())
-        
+
         if self.force_update or modified_since <= 0:
             modified_since = 0
             # delete all EADs and related files in ArcLight Solr
@@ -524,7 +533,7 @@ class ArcFlow:
                     json={'delete': {'query': '*:*'}},
                 )
                 if response.status_code == 200:
-                    self.log.info('Deleted all EADs from ArcLight Solr.')
+                    self.log.info('Deleted all EADs and Creators from ArcLight Solr.')
                     # delete related directories after suscessful
                     # deletion from solr
                     for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
@@ -536,10 +545,10 @@ class ArcFlow:
                 else:
                     self.log.error(f'Failed to delete all EADs from Arclight Solr. Status code: {response.status_code}')
             except requests.exceptions.RequestException as e:
-                self.log.error(f'Error deleting all EADs from ArcLight Solr: {e}')
+                self.log.error(f'Error deleting all EADs and Creators from ArcLight Solr: {e}')
 
         # create directories if don't exist
-        for dir_path in (xml_dir, pdf_dir):
+        for dir_path in (resource_dir, pdf_dir):
             os.makedirs(dir_path, exist_ok=True)
 
         # process resources that have been modified in ArchivesSpace since last update
@@ -552,7 +561,7 @@ class ArcFlow:
             # Tasks for processing repositories
             results_1 = [pool.apply_async(
                 self.task_repository, 
-                args=(repo, xml_dir, modified_since, indent_size)) 
+                args=(repo, resource_dir, modified_since, indent_size))
                 for repo in repos]
             # Collect outputs from repository tasks
             outputs_1 = [r.get() for r in results_1]
@@ -560,7 +569,7 @@ class ArcFlow:
             # Tasks for processing resources
             results_2 = [pool.apply_async(
                 self.task_resource, 
-                args=(repo, resource_id, xml_dir, pdf_dir, indent_size)) 
+                args=(repo, resource_id, resource_dir, pdf_dir, indent_size))
                 for repo, resources in outputs_1 for resource_id in resources]
             # Collect outputs from resource tasks
             outputs_2 = [r.get() for r in results_2]
@@ -575,7 +584,7 @@ class ArcFlow:
             # Tasks for indexing pending resources
             results_3 = [pool.apply_async(
                 self.index_collections,
-                args=(repo_id, f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
+                args=(repo_id, f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml', indent_size))
                 for repo_id, batch_num in batches]
 
             # Wait for indexing tasks to complete
@@ -584,7 +593,7 @@ class ArcFlow:
 
             # Remove pending symlinks after indexing
             for repo_id, batch_num in batches:
-                xml_file_path = f'{xml_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                xml_file_path = f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml'
                 try:
                     result = subprocess.run(
                         f'rm {xml_file_path}',
@@ -607,14 +616,23 @@ class ArcFlow:
             for r in results_4:
                 r.get()
 
-        # processing deleted resources is not needed when 
-        # force-update is set or modified_since is set to 0
-        if self.force_update or modified_since <= 0:
-            self.log.info('Skipping deleted resources processing.')
-            return
+        return
 
-        # process resources that have been deleted since last update in ArchivesSpace
-        pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<resource_id>\d+)$'
+
+
+    def process_deleted_records(self):
+
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        resource_dir = f'{xml_dir}/resources'
+        agent_dir = f'{xml_dir}/agents'
+        pdf_dir = f'{self.arclight_dir}/public/pdf'
+        modified_since = int(self.last_updated.timestamp())
+
+        # process records that have been deleted since last update in ArchivesSpace
+        resource_pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<record_id>\d+)$'
+        agent_pattern = r'^/agents/(?P<agent_type>people|corporate_entities|families)/(?P<record_id>\d+)$'
+
+
         page = 1
         while True:
             deleted_records = self.client.get(
@@ -625,12 +643,13 @@ class ArcFlow:
                 }
             ).json()
             for record in deleted_records['results']:
-                match = re.match(pattern, record)
-                if match:
-                    resource_id = match.group('resource_id')
+                resource_match = re.match(resource_pattern, record)
+                agent_match = re.match(agent_pattern, record)
+                if resource_match and not self.agents_only:
+                    resource_id = resource_match.group('resource_id')
                     self.log.info(f'{" " * indent_size}Processing deleted resource ID {resource_id}...')
 
-                    symlink_path = f'{xml_dir}/{resource_id}.xml'
+                    symlink_path = f'{resource_dir}/{resource_id}.xml'
                     ead_id = self.get_ead_from_symlink(symlink_path)
                     if ead_id:
                         self.delete_ead(
@@ -638,9 +657,17 @@ class ArcFlow:
                             ead_id.replace('.', '-'),  # dashes in Solr
                             f'{xml_dir}/{ead_id}.xml', # dots in filenames
                             f'{pdf_dir}/{ead_id}.pdf', 
-                            indent=4)
+                            indent_size=4)
                     else:
                         self.log.error(f'{" " * (indent_size+2)}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
+
+                if agent_match and not self.collections_only:
+                    agent_id = agent_match.group('agent_id')
+                    self.log.info(f'{" " * indent_size}Processing deleted agent ID {agent_id}...')
+                    file_path = f'{agent_dir}/{agent_id}.xml'
+                    agent_solr_id = f'creator_{agent_type}_{agent_id}'
+                    self.delete_creator(file_path, agent_solr_id, indent_size)
+
 
             if deleted_records['last_page'] == page:
                 break
@@ -660,13 +687,13 @@ class ArcFlow:
                 cwd=self.arclight_dir
             )
             arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
-            
+
             if not arclight_path:
                 self.log.error(f'{indent}Could not find arclight gem path')
                 return
-            
+
             traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
-            
+            xml_files = glob.glob(xml_file_path)  # Returns list of matching files
             cmd = [
                 'bundle', 'exec', 'traject',
                 '-u', self.solr_url,
@@ -675,21 +702,18 @@ class ArcFlow:
                 '-s', f'solr_writer.batch_size={self.batch_size}',
                 '-s', 'solr_writer.commit_on_close=true',
                 '-i', 'xml',
-                '-c', traject_config
-            ]
-            
+                '-c', traject_config,
+            ] + xml_files
+
             if self.traject_extra_config:
                 if isinstance(self.traject_extra_config, (list, tuple)):
                     cmd.extend(self.traject_extra_config)
                 else:
                     # Treat a string extra config as a path and pass it with -c
                     cmd.extend(['-c', self.traject_extra_config])
-            
-            cmd.append(xml_file_path)
-            
+
             env = os.environ.copy()
             env['REPOSITORY_ID'] = str(repo_id)
-            
             result = subprocess.run(
                 cmd,
                 cwd=self.arclight_dir,
@@ -715,10 +739,10 @@ class ArcFlow:
         """
         indent = ' ' * indent_size
         bioghist_elements = []
-        
+
         if 'linked_agents' not in resource:
             return None
-        
+
         # Process linked_agents in order to maintain consistency with origination order
         for linked_agent in resource['linked_agents']:
             # Only process agents with 'creator' role
@@ -727,10 +751,10 @@ class ArcFlow:
                 if agent_ref:
                     try:
                         agent = self.client.get(agent_ref).json()
-                        
+
                         # Get agent name for head element
                         agent_name = agent.get('title') or agent.get('display_name', {}).get('sort_name', 'Unknown')
-                        
+
                         # Check for notes in the agent record
                         if 'notes' in agent:
                             for note in agent['notes']:
@@ -742,7 +766,7 @@ class ArcFlow:
                                         self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist for agent {agent_ref}')
                                         # Skip creating id attribute if persistent_id is missing
                                         persistent_id = None
-                                    
+
                                     # Extract note content from subnotes
                                     paragraphs = []
                                     if 'subnotes' in note:
@@ -764,7 +788,7 @@ class ArcFlow:
                                                 # Wrap each line in <p> tags
                                                 for line in lines:
                                                     paragraphs.append(f'<p>{line}</p>')
-                                    
+
                                     # Create nested bioghist element if we have paragraphs
                                     if paragraphs:
                                         paragraphs_xml = '\n'.join(paragraphs)
@@ -777,7 +801,7 @@ class ArcFlow:
                                         bioghist_elements.append(bioghist_el)
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
-        
+
         if bioghist_elements:
             # Return the agent bioghist elements (unwrapped)
             # The caller will decide whether to wrap them based on whether
@@ -785,201 +809,153 @@ class ArcFlow:
             return '\n'.join(bioghist_elements)
         return None
 
+    def _get_target_agent_criteria(self, modified_since=0):
+        """
+        Defines the Solr query criteria for "target" agents.
+        These are agents we want to process.
+        """
+        criteria = [
+            "linked_agent_roles:creator",
+            "system_generated:false",
+            "is_user:false",
+#             "is_repo_agent:false",
+        ]
 
-    def is_target_agent(self, agent):
+        # Add time filter if applicable
+        if modified_since > 0 and not self.force_update:
+            mtime_utc = datetime.fromtimestamp(modified_since, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            criteria.append(f"system_mtime:[{mtime_utc} TO *]")
+
+        return criteria
+
+    def _get_nontarget_agent_criteria(self, modified_since=0):
         """
-        Determine if agent is a target creator of archival materials.
-        
-        Excludes:
-        - System users (is_user field present)
-        - System-generated agents (system_generated = true)
-        - Repository agents (is_repo_agent field present)
-        - Donor-only agents (only has 'donor' role, no creator role)
-        
-        Note: Software agents are excluded by not querying /agents/software endpoint.
-        
+        Defines the Solr query criteria for "non-target" (excluded) agents.
+        This is the logical inverse of the target criteria.
+        """
+        # The core logic for what makes an agent a "target"
+        target_logic = " AND ".join([
+            "linked_agent_roles:creator",
+            "system_generated:false",
+            "is_user:false",
+#             "is_repo_agent:false",
+        ])
+
+        # We find non-targets by negating the entire block of target logic
+        criteria = [f"NOT ({target_logic})"]
+
+        # We still apply the time filter to the overall query
+        if modified_since > 0 and not self.force_update:
+            mtime_utc = datetime.fromtimestamp(modified_since, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            criteria.append(f"system_mtime:[{mtime_utc} TO *]")
+
+        return criteria
+
+    def _execute_solr_query(self, query_parts, solr_url=None, fields=['id'], indent_size=0):
+        """
+        A generic function to execute a query against the Solr index.
+
         Args:
-            agent: Agent record from ArchivesSpace API
-            
+            query_parts (list): A list of strings that will be joined with " AND ".
+            fields (list): A list of Solr fields to return in the response.
+
         Returns:
-            bool: True if agent should be indexed, False to exclude
+            list: A list of dictionaries, where each dictionary contains the requested fields.
+                  Returns an empty list on failure.
         """
-        # TIER 1: Exclude system users (PRIMARY FILTER)
-        if agent.get('is_user'):
-            return False
-        
-        # TIER 2: Exclude system-generated agents
-        if agent.get('system_generated'):
-            return False
-        
-        # TIER 3: Exclude repository agents (corporate entities only)
-        if agent.get('is_repo_agent'):
-            return False
-        
-        # TIER 4: Role-based filtering
-        roles = agent.get('linked_agent_roles', [])
-        
-        # Include if explicitly marked as creator
-        if 'creator' in roles:
-            return True
-        
-        # Exclude if ONLY marked as donor
-        if roles == ['donor']:
-            return False
-        
-        # TIER 5: Default - include if linked to published records
-        # (covers cases where roles aren't populated yet)
-        return agent.get('is_linked_to_published_record', False)
+        indent = ' ' * indent_size
+        if not query_parts:
+            self.log.error("Cannot execute Solr query with empty criteria.")
+            return []
+
+        if not solr_url:
+            solr_url = self.solr_url
+
+        query_string = " AND ".join(query_parts)
+        self.log.info(f"{indent}Executing Solr query: {query_string}")
+
+        try:
+            # First, get the total count of matching documents
+            count_params = {'q': query_string, 'rows': 0, 'wt': 'json'}
+            count_response = requests.get(f'{solr_url}/select', params=count_params)
+            self.log.info(f"  [Solr Count Request]: {count_response.request.url}")
+
+            count_response.raise_for_status()
+            num_found = count_response.json()['response']['numFound']
+
+            if num_found == 0:
+                return [] # No need to query again if nothing was found
+
+            # Now, fetch the actual data for the documents
+            data_params = {
+                'q': query_string,
+                'rows': num_found,  # Use the exact count to fetch all results
+                'fl': ','.join(fields), # Join field list into a comma-separated string
+                'wt': 'json'
+            }
+            response = requests.get(f'{solr_url}/select', params=data_params)
+            response.raise_for_status()
+            # Log the exact URL for the data request
+            self.log.info(f"  [Solr Data Request]: {response.request.url}")
+
+            return response.json()['response']['docs']
+
+        except requests.exceptions.RequestException as e:
+            self.log.error(f"Failed to execute Solr query: {e}")
+            self.log.error(f"  Failed query string: {query_string}")
+            return []
 
     def get_all_agents(self, agent_types=None, modified_since=0, indent_size=0):
         """
-        Fetch target agents from ArchivesSpace and filter to creators only.
-        Excludes system users, donors, and other non-creator agents.
-        
-        Args:
-            agent_types: List of agent types to fetch. Default: ['corporate_entities', 'people', 'families']
-            modified_since: Unix timestamp to filter agents modified since this time (if API supports it)
-            indent_size: Indentation size for logging
-            
-        Returns:
-            list: List of filtered agent URIs (e.g., '/agents/corporate_entities/123')
+        Fetch target agent URIs from the Solr index and log non-target agents.
         """
         if agent_types is None:
-            agent_types = ['corporate_entities', 'people', 'families']
-        
-        indent = ' ' * indent_size
-        target_agents = []
-        stats = {
-            'total': 0,
-            'excluded_user': 0,
-            'excluded_system_generated': 0,
-            'excluded_repo_agent': 0,
-            'excluded_donor_only': 0,
-            'excluded_no_links': 0,
-            'included': 0
-        }
-        
-        self.log.info(f'{indent}Fetching agents from ArchivesSpace and applying filters...')
-        
-        for agent_type in agent_types:
-            try:
-                # Try with modified_since parameter first
-                params = {'all_ids': True}
-                if modified_since > 0:
-                    params['modified_since'] = modified_since
-                
-                response = self.client.get(f'/agents/{agent_type}', params=params)
-                agent_ids = response.json()
-                
-                self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents, filtering...')
-                
-                # Fetch and filter each agent
-                for agent_id in agent_ids:
-                    stats['total'] += 1
-                    agent_uri = f'/agents/{agent_type}/{agent_id}'
-                    
-                    try:
-                        # Fetch full agent record to access filtering fields
-                        agent_response = self.client.get(agent_uri)
-                        agent = agent_response.json()
-                        
-                        # Apply filtering logic
-                        if agent.get('is_user'):
-                            stats['excluded_user'] += 1
-                            continue
-                        
-                        if agent.get('system_generated'):
-                            stats['excluded_system_generated'] += 1
-                            continue
-                        
-                        if agent.get('is_repo_agent'):
-                            stats['excluded_repo_agent'] += 1
-                            continue
-                        
-                        roles = agent.get('linked_agent_roles', [])
-                        
-                        # Include creators
-                        if 'creator' in roles:
-                            stats['included'] += 1
-                            target_agents.append(agent_uri)
-                            continue
-                        
-                        # Exclude donor-only agents
-                        if roles == ['donor']:
-                            stats['excluded_donor_only'] += 1
-                            continue
-                        
-                        # Default: include if linked to published records
-                        if agent.get('is_linked_to_published_record', False):
-                            stats['included'] += 1
-                            target_agents.append(agent_uri)
-                        else:
-                            stats['excluded_no_links'] += 1
-                            
-                    except Exception as e:
-                        self.log.warning(f'{indent}Error fetching agent {agent_uri}: {e}')
-                        # On error, include the agent (fail-open)
-                        target_agents.append(agent_uri)
-                    
-            except Exception as e:
-                self.log.error(f'{indent}Error fetching {agent_type} agents: {e}')
-                # If modified_since fails, try without it
-                if modified_since > 0:
-                    self.log.warning(f'{indent}Retrying {agent_type} without modified_since filter...')
-                    try:
-                        response = self.client.get(f'/agents/{agent_type}', params={'all_ids': True})
-                        agent_ids = response.json()
-                        self.log.info(f'{indent}Found {len(agent_ids)} {agent_type} agents (no date filter)')
-                        
-                        # Re-process with filtering
-                        for agent_id in agent_ids:
-                            stats['total'] += 1
-                            agent_uri = f'/agents/{agent_type}/{agent_id}'
-                            
-                            try:
-                                agent_response = self.client.get(agent_uri)
-                                agent = agent_response.json()
-                                
-                                if self.is_target_agent(agent):
-                                    stats['included'] += 1
-                                    target_agents.append(agent_uri)
-                                    
-                            except Exception as e:
-                                self.log.warning(f'{indent}Error fetching agent {agent_uri}: {e}')
-                                target_agents.append(agent_uri)
-                                
-                    except Exception as e2:
-                        self.log.error(f'{indent}Failed to fetch {agent_type} agents: {e2}')
-        
-        # Log filtering statistics
-        self.log.info(f'{indent}Agent filtering complete:')
-        self.log.info(f'{indent}  Total agents processed: {stats["total"]}')
-        self.log.info(f'{indent}  Included (target creators): {stats["included"]}')
-        self.log.info(f'{indent}  Excluded (system users): {stats["excluded_user"]}')
-        self.log.info(f'{indent}  Excluded (system-generated): {stats["excluded_system_generated"]}')
-        self.log.info(f'{indent}  Excluded (repository agents): {stats["excluded_repo_agent"]}')
-        self.log.info(f'{indent}  Excluded (donor-only): {stats["excluded_donor_only"]}')
-        self.log.info(f'{indent}  Excluded (no published links): {stats["excluded_no_links"]}')
-        
-        return target_agents
+            agent_types = ['agent_person', 'agent_corporate_entity', 'agent_family']
 
+        if self.force_update:
+            modified_since = 0
+        indent = ' ' * indent_size
+        self.log.info(f'{indent}Fetching agent data from Solr...')
+
+        # Base criteria for all queries in this function
+        base_criteria = [f"primary_type:({' OR '.join(agent_types)})"]
+
+        # Get and log the non-target agents
+        nontarget_criteria = base_criteria + self._get_nontarget_agent_criteria(modified_since)
+        excluded_docs = self._execute_solr_query(nontarget_criteria,self.aspace_solr_url, fields=['id'])
+        if excluded_docs:
+            excluded_ids = [doc['id'] for doc in excluded_docs]
+            self.log.info(f"{indent}  Found {len(excluded_ids)} non-target (excluded) agents.")
+            # Optional: Log the actual IDs if the list isn't too long
+            # for agent_id in excluded_ids:
+            #     self.log.debug(f"{indent}    - Excluded: {agent_id}")
+
+        # Get and return the target agents
+        target_criteria = base_criteria + self._get_target_agent_criteria(modified_since)
+        self.log.info('Target Criteria:')
+        target_docs = self._execute_solr_query(target_criteria, self.aspace_solr_url, fields=['id'])
+
+        target_agents = [doc['id'] for doc in target_docs]
+        self.log.info(f"{indent}  Found {len(target_agents)} target agents to process.")
+
+        return target_agents
 
     def task_agent(self, agent_uri, agents_dir, repo_id=1, indent_size=0):
         """
         Process a single agent and generate a creator document in EAC-CPF XML format.
         Retrieves EAC-CPF directly from ArchivesSpace archival_contexts endpoint.
-        
+
         Args:
             agent_uri: Agent URI from ArchivesSpace (e.g., '/agents/corporate_entities/123')
             agents_dir: Directory to save agent XML files
             repo_id: Repository ID to use for archival_contexts endpoint (default: 1)
             indent_size: Indentation size for logging
-            
+
         Returns:
             str: Creator document ID if successful, None otherwise
         """
         indent = ' ' * indent_size
-        
+
         try:
             # Parse agent URI to extract type and ID
             # URI format: /agents/{agent_type}/{id}
@@ -987,25 +963,25 @@ class ArcFlow:
             if len(parts) != 3 or parts[0] != 'agents':
                 self.log.error(f'{indent}Invalid agent URI format: {agent_uri}')
                 return None
-            
+
             agent_type = parts[1]  # e.g., 'corporate_entities', 'people', 'families'
             agent_id = parts[2]
-            
+
             # Construct EAC-CPF endpoint
             # Format: /repositories/{repo_id}/archival_contexts/{agent_type}/{id}.xml
             eac_cpf_endpoint = f'/repositories/{repo_id}/archival_contexts/{agent_type}/{agent_id}.xml'
-            
+
             self.log.debug(f'{indent}Fetching EAC-CPF from: {eac_cpf_endpoint}')
-            
+
             # Fetch EAC-CPF XML
             response = self.client.get(eac_cpf_endpoint)
-            
+
             if response.status_code != 200:
                 self.log.error(f'{indent}Failed to fetch EAC-CPF for {agent_uri}: HTTP {response.status_code}')
                 return None
-            
+
             eac_cpf_xml = response.text
-            
+
             # Parse the EAC-CPF XML to validate and inspect its structure
             try:
                 root = ET.fromstring(eac_cpf_xml)
@@ -1013,18 +989,18 @@ class ArcFlow:
             except ET.ParseError as e:
                 self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
                 return None
-            
+
             # Generate creator ID
             creator_id = f'creator_{agent_type}_{agent_id}'
-            
+
             # Save EAC-CPF XML to file
             filename = f'{agents_dir}/{creator_id}.xml'
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(eac_cpf_xml)
-            
+
             self.log.info(f'{indent}Created creator document: {creator_id}')
             return creator_id
-            
+
         except Exception as e:
             self.log.error(f'{indent}Error processing agent {agent_uri}: {e}')
             import traceback
@@ -1096,18 +1072,18 @@ class ArcFlow:
     def find_traject_config(self):
         """
         Find the traject config for creator indexing.
-        
+
         Search order (follows collection records pattern):
         1. arcuit_dir if provided (most up-to-date user control)
         2. arcuit gem via bundle show (for backward compatibility)
         3. example_traject_config_eac_cpf.rb in arcflow (fallback when used as module without arcuit)
-        
+
         Returns:
             str: Path to traject config, or None if not found
         """
         self.log.info('Searching for traject_config_eac_cpf.rb...')
         searched_paths = []
-        
+
         # Try 1: arcuit_dir if provided (highest priority - user's explicit choice)
         if self.arcuit_dir:
             self.log.debug(f'  Checking arcuit_dir parameter: {self.arcuit_dir}')
@@ -1121,7 +1097,7 @@ class ArcFlow:
                     self.log.info(f'✓ Using traject config from arcuit_dir: {traject_config}')
                     return traject_config
             self.log.debug('  traject_config_eac_cpf.rb not found in arcuit_dir')
-        
+
         # Try 2: bundle show arcuit (for backward compatibility when arcuit_dir not provided)
         try:
             result = subprocess.run(
@@ -1151,14 +1127,14 @@ class ArcFlow:
                 self.log.debug('  arcuit gem not found via bundle show')
         except Exception as e:
             self.log.debug(f'  Error checking for arcuit gem: {e}')
-        
+
         # Try 3: example file in arcflow package (fallback for module usage without arcuit)
         # We know exactly where this file is located - at the repo root
         arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
         arcflow_repo_root = os.path.dirname(arcflow_package_dir)
         traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
         searched_paths.append(traject_config)
-        
+
         if os.path.exists(traject_config):
             self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
             self.log.info(
@@ -1166,7 +1142,7 @@ class ArcFlow:
                 'arcuit gem or specify location with --arcuit-dir.'
             )
             return traject_config
-        
+
         # No config found anywhere - show all paths searched
         self.log.error('✗ Could not find traject_config_eac_cpf.rb in any of these locations:')
         for i, path in enumerate(searched_paths, 1):
@@ -1179,38 +1155,38 @@ class ArcFlow:
     def index_creators(self, agents_dir, creator_ids, batch_size=100):
         """
         Index creator XML files to Solr using traject.
-        
+
         Args:
             agents_dir: Directory containing creator XML files
             creator_ids: List of creator IDs to index
             batch_size: Number of files to index per traject call (default: 100)
-        
+
         Returns:
             int: Number of successfully indexed creators
         """
         traject_config = self.find_traject_config()
         if not traject_config:
             return 0
-        
+
         indexed_count = 0
         failed_count = 0
-        
+
         # Process in batches to avoid command line length limits
         total_batches = math.ceil(len(creator_ids) / batch_size)
         for i in range(0, len(creator_ids), batch_size):
             batch = creator_ids[i:i+batch_size]
             batch_num = (i // batch_size) + 1
-            
+
             # Build list of XML files for this batch
             xml_files = [f'{agents_dir}/{cid}.xml' for cid in batch]
-            
+
             # Filter to only existing files
             existing_files = [f for f in xml_files if os.path.exists(f)]
-            
+
             if not existing_files:
                 self.log.warning(f'  Batch {batch_num}/{total_batches}: No files found, skipping')
                 continue
-            
+
             try:
                 cmd = [
                     'bundle', 'exec', 'traject',
@@ -1218,16 +1194,16 @@ class ArcFlow:
                     '-i', 'xml',
                     '-c', traject_config
                 ] + existing_files
-                
+
                 self.log.info(f'  Indexing batch {batch_num}/{total_batches}: {len(existing_files)} files')
-                
+
                 result = subprocess.run(
                     cmd,
                     cwd=self.arclight_dir,
                     stderr=subprocess.PIPE,
                     timeout=300  # 5 minute timeout per batch
                 )
-                
+
                 if result.returncode == 0:
                     indexed_count += len(existing_files)
                     self.log.info(f'  Successfully indexed {len(existing_files)} creators')
@@ -1236,7 +1212,7 @@ class ArcFlow:
                     self.log.error(f'  Traject failed with exit code {result.returncode}')
                     if result.stderr:
                         self.log.error(f'  STDERR: {result.stderr.decode("utf-8")}')
-                    
+
             except subprocess.TimeoutExpired:
                 self.log.error(f'  Traject timed out for batch {batch_num}/{total_batches}')
                 failed_count += len(existing_files)
@@ -1246,7 +1222,7 @@ class ArcFlow:
 
         if failed_count > 0:
             self.log.warning(f'Creator indexing completed with errors: {indexed_count} succeeded, {failed_count} failed')
-        
+
         return indexed_count
 
 
@@ -1326,37 +1302,49 @@ class ArcFlow:
             self.log.info(f'{indent}{e}')
             return False
 
-
-    def delete_ead(self, resource_id, ead_id, 
-            xml_file_path, pdf_file_path, indent_size=0):
+    def delete_arclight_solr_record(self, solr_record_id, indent_size=0):
         indent = ' ' * indent_size
-        # delete from solr
+
         try:
             response = requests.post(
                 f'{self.solr_url}/update?commit=true',
-                json={'delete': {'id': ead_id}},
+                json={'delete': {'id': solr_record_id}},
             )
             if response.status_code == 200:
-                self.log.info(f'{indent}Deleted EAD "{ead_id}" from ArcLight Solr.')
-                # delete related files after suscessful deletion from solr
-                for file_path in (xml_file_path, pdf_file_path):
-                    try:
-                        os.remove(file_path)
-                        self.log.info(f'{indent}Deleted file {file_path}.')
-                    except FileNotFoundError:
-                        self.log.error(f'{indent}File {file_path} not found.')
-
-                # delete symlink if exists
-                symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
-                try:
-                    os.remove(symlink_path)
-                    self.log.info(f'{indent}Deleted symlink {symlink_path}.')
-                except FileNotFoundError:
-                    self.log.info(f'{indent}Symlink {symlink_path} not found.')
+                self.log.info(f'{indent}Deleted Solr record {solr_record_id}. from ArcLight Solr')
+                return True
             else:
-                self.log.error(f'{indent}Failed to delete EAD "{ead_id}" from Arclight Solr. Status code: {response.status_code}')
+                self.log.error(
+                    f'{indent}Failed to delete Solr record {solr_record_id} from Arclight Solr. Status code: {response.status_code}')
+                return False
         except requests.exceptions.RequestException as e:
-            self.log.error(f'{indent}Error deleting EAD "{ead_id}" from ArcLight Solr: {e}')
+            self.log.error(f'{indent}Error deleting Solr record {solr_record_id} from ArcLight Solr: {e}')
+
+    def delete_file(self, file_path, indent_size=0):
+        indent = ' ' * indent_size
+
+        try:
+            os.remove(file_path)
+            self.log.info(f'{indent}Deleted file {file_path}.')
+        except FileNotFoundError:
+            self.log.error(f'{indent}File {file_path} not found.')
+
+    def delete_ead(self, resource_id, ead_id,
+            xml_file_path, pdf_file_path, indent_size=0):
+        # delete from solr
+        deleted_solr_record = self.delete_arclight_solr_record(ead_id, indent_size=indent_size)
+        if deleted_solr_record:
+            self.delete_file(pdf_file_path, indent_size=indent_size)
+            self.delete_file(xml_file_path, indent_size=indent_size)
+            # delete symlink if exists
+            symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
+            self.delete_file(symlink_path, indent_size=indent_size)
+
+    def delete_creator(self, file_path, solr_id, indent_size=0):
+        deleted_solr_record = self.delete_arclight_solr_record(solr_id, indent_size=indent_size)
+        if deleted_solr_record:
+            self.delete_file(file_path, indent_size=indent_size)
+
 
 
     def save_config_file(self):
@@ -1378,23 +1366,30 @@ class ArcFlow:
         Run the ArcFlow process.
         """
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
-        
+
         # Update repositories (unless agents-only mode)
         if not self.agents_only:
             self.update_repositories()
-        
+
         # Update collections/EADs (unless agents-only mode)
         if not self.agents_only:
             self.update_eads()
-        
+
         # Update creator records (unless collections-only mode)
         if not self.collections_only:
             self.process_creators()
-        
+
+        # processing deleted resources is not needed when
+        # force-update is set or modified_since is set to 0
+        if self.force_update or int(self.last_updated.timestamp()) <= 0:
+            self.log.info('Skipping deleted record processing.')
+        else:
+            self.process_deleted_records()
+
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
 
-    
+
 
 
 def main():
@@ -1414,7 +1409,11 @@ def main():
     parser.add_argument(
         '--solr-url',
         required=True,
-        help='URL of the Solr core',)
+        help='URL of the ArcLight Solr core',)
+    parser.add_argument(
+        '--aspace-solr-url',
+        required=True,
+        help='URL of the ASpace Solr core',)
     parser.add_argument(
         '--traject-extra-config',
         default='',
@@ -1446,15 +1445,16 @@ def main():
         default=1800,
         help='Timeout in seconds for PDF jobs in "running" status (default: 1800 = 30 minutes)',)
     args = parser.parse_args()
-    
+
+
     # Validate mutually exclusive flags
     if args.agents_only and args.collections_only:
         parser.error('Cannot use both --agents-only and --collections-only')
-
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
+        aspace_solr_url=args.aspace_solr_url,
         traject_extra_config=args.traject_extra_config,
         force_update=args.force_update,
         agents_only=args.agents_only,

@@ -22,6 +22,12 @@ extend TrajectPlus::Macros
 # EAC-CPF namespace - used consistently throughout this config
 EAC_NS = { 'eac' => 'urn:isbn:1-931666-33-4' }
 
+# Pattern matching arcflow's creator file naming: creator_{entity_type}_{id}
+CREATOR_ID_PATTERN = /^creator_(corporate_entities|people|families)_\d+$/
+
+# Entity types - SINGLE SOURCE OF TRUTH
+ENTITY_TYPES = ['corporate_entities', 'people', 'families']
+
 settings do
   provide "solr.url", ENV['SOLR_URL'] || "http://localhost:8983/solr/blacklight-core"
   provide "solr_writer.commit_on_close", "true"
@@ -38,76 +44,21 @@ each_record do |record, context|
   context.clipboard[:is_creator] = true
 end
 
-# Core identity field
-# CRITICAL: The 'id' field is required by Solr's schema (uniqueKey)
-# Must ensure this field is never empty or indexing will fail
-#
-# IMPORTANT: Real EAC-CPF from ArchivesSpace has empty <control/> element!
-# Cannot rely on recordId being present. Must extract from filename or generate.
+# Solr uniqueKey - extract ID from filename using arcflow's creator_{entity_type}_{id} pattern
 to_field 'id' do |record, accumulator, context|
-  # Try 1: Extract from control/recordId (if present)
-  record_id = record.xpath('//eac:control/eac:recordId', EAC_NS).first
-  
-  if record_id && !record_id.text.strip.empty?
-    accumulator << record_id.text.strip
-  else
-    # Try 2: Extract from source filename (most reliable for ArchivesSpace exports)
-    # Filename format: creator_corporate_entities_584.xml or similar
-    source_file = context.source_record_id || context.input_name
-    if source_file
-      # Remove .xml extension and any path
-      id_from_filename = File.basename(source_file, '.xml')
-      # Check if it looks valid (starts with creator_ or agent_)
-      if id_from_filename =~ /^(creator_|agent_)/
-        accumulator << id_from_filename
-        context.logger.info("Using filename-based ID: #{id_from_filename}")
-      else
-        # Try 3: Generate from entity type and name
-        entity_type = record.xpath('//eac:cpfDescription/eac:identity/eac:entityType', EAC_NS).first&.text&.strip
-        name_entry = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS).first&.text&.strip
-        
-        if entity_type && name_entry
-          # Create stable ID from type and name
-          type_short = case entity_type
-                      when 'corporateBody' then 'corporate'
-                      when 'person' then 'person'
-                      when 'family' then 'family'
-                      else 'entity'
-                      end
-          name_id = name_entry.gsub(/[^a-z0-9]/i, '_').downcase[0..50] # Limit length
-          generated_id = "creator_#{type_short}_#{name_id}"
-          accumulator << generated_id
-          context.logger.warn("Generated ID from name: #{generated_id}")
-        else
-          # Last resort: timestamp-based unique ID
-          fallback_id = "creator_unknown_#{Time.now.to_i}_#{rand(10000)}"
-          accumulator << fallback_id
-          context.logger.error("Using fallback ID: #{fallback_id}")
-        end
-      end
+  source_file = context.source_record_id || context.input_name
+  if source_file
+    id_from_filename = File.basename(source_file, '.xml')
+    if id_from_filename =~ CREATOR_ID_PATTERN
+      accumulator << id_from_filename
+      context.logger.info("Using filename-based ID: #{id_from_filename}")
     else
-      # No filename available, generate from name
-      entity_type = record.xpath('//eac:cpfDescription/eac:identity/eac:entityType', EAC_NS).first&.text&.strip
-      name_entry = record.xpath('//eac:cpfDescription/eac:identity/eac:nameEntry/eac:part', EAC_NS).first&.text&.strip
-      
-      if entity_type && name_entry
-        type_short = case entity_type
-                    when 'corporateBody' then 'corporate'
-                    when 'person' then 'person'
-                    when 'family' then 'family'
-                    else 'entity'
-                    end
-        name_id = name_entry.gsub(/[^a-z0-9]/i, '_').downcase[0..50]
-        generated_id = "creator_#{type_short}_#{name_id}"
-        accumulator << generated_id
-        context.logger.warn("Generated ID from name: #{generated_id}")
-      else
-        # Absolute last resort
-        fallback_id = "creator_unknown_#{Time.now.to_i}_#{rand(10000)}"
-        accumulator << fallback_id
-        context.logger.error("Using fallback ID: #{fallback_id}")
-      end
+      context.logger.error("Filename doesn't match expected pattern 'creator_{type}_{id}': #{id_from_filename}")
+      context.skip!("Invalid ID format in filename")
     end
+  else
+    context.logger.error("No source filename available for record")
+    context.skip!("Missing source filename")
   end
 end
 
@@ -116,13 +67,13 @@ to_field 'is_creator' do |record, accumulator|
   accumulator << 'true'
 end
 
-# Record type
-to_field 'record_type' do |record, accumulator|
-  accumulator << 'creator'
-end
+# # Record type
+# to_field 'record_type' do |record, accumulator|
+#   accumulator << 'creator'
+# end
 
 # Entity type (corporateBody, person, family)
-to_field 'entity_type' do |record, accumulator|
+to_field 'entity_type_ssi' do |record, accumulator|
   entity = record.xpath('//eac:cpfDescription/eac:identity/eac:entityType', EAC_NS).first
   accumulator << entity.text if entity
 end
@@ -212,26 +163,25 @@ to_field 'text' do |record, accumulator|
   accumulator << bioghist.map(&:text).join(' ') if bioghist.any?
 end
 
-# Related agents (from cpfRelation elements)
-to_field 'related_agents_ssim' do |record, accumulator|
+# Related agents (from cpfRelation elements) for display parsing and debugging, stored as a single line
+# 	"https://archivesspace-stage.library.illinois.edu/agents/corporate_entities/57|associative"
+to_field 'related_agents_debug_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
-    # Get the related entity href/identifier
     href = rel['href'] || rel['xlink:href']
     relation_type = rel['cpfRelationType']
-    
+
     if href
-      # Store as: "uri|type" for easy parsing later
-      accumulator << "#{href}|#{relation_type}"
-    elsif relation_entry = rel.xpath('eac:relationEntry', EAC_NS).first
-      # If no href, at least store the name
-      name = relation_entry.text
-      accumulator << "#{name}|#{relation_type}" if name
+      solr_id = aspace_uri_to_solr_id(href)
+      if solr_id
+        # Format: "solr_id|type"
+        accumulator << "#{solr_id}|#{relation_type || 'unknown'}"
+      end
     end
   end
 end
 
-# Related agents - just URIs (for simpler queries)
+# Related agents - ASpace URIs, in parallel array to match ids and types
 to_field 'related_agent_uris_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
@@ -240,7 +190,31 @@ to_field 'related_agent_uris_ssim' do |record, accumulator|
   end
 end
 
-# Relationship types
+# Related agents - Parallel array of relationship ids to match relationship types and uris
+to_field 'related_agent_ids_ssim' do |record, accumulator|
+  relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
+  relations.each do |rel|
+    href = rel['href'] || rel['xlink:href']
+    if href
+      solr_id = aspace_uri_to_solr_id(href)  # CONVERT URI TO ID
+      accumulator << solr_id if solr_id
+    end
+  end
+end
+
+# Related Agents - Parallel array of relationship types to match relationship ids and uris
+to_field 'related_agent_relationship_types_ssim' do |record, accumulator|
+  relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
+  relations.each do |rel|
+    href = rel['href'] || rel['xlink:href']
+    if href
+      relation_type = rel['cpfRelationType'] || 'unknown'
+      accumulator << relation_type  # NO deduplication - keeps array parallel
+    end
+  end
+end
+
+# Relationship types used for faceting,
 to_field 'relationship_types_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
   relations.each do |rel|
@@ -250,7 +224,7 @@ to_field 'relationship_types_ssim' do |record, accumulator|
 end
 
 # Agent source URI (from original ArchivesSpace)
-to_field 'agent_uri' do |record, accumulator|
+to_field 'agent_uri_ssi' do |record, accumulator|
   # Try to extract from control section or otherRecordId
   other_id = record.xpath('//eac:control/eac:otherRecordId[@localType="archivesspace_uri"]', EAC_NS).first
   if other_id
@@ -263,15 +237,39 @@ to_field 'timestamp' do |record, accumulator|
   accumulator << Time.now.utc.iso8601
 end
 
-# Document type marker
-to_field 'document_type' do |record, accumulator|
-  accumulator << 'creator'
-end
+# # Document type marker
+# to_field 'document_type' do |record, accumulator|
+#   accumulator << 'creator'
+# end
 
 # Log successful indexing
 each_record do |record, context|
   record_id = record.xpath('//eac:control/eac:recordId', EAC_NS).first
   if record_id
     context.logger.info("Indexed creator: #{record_id.text}")
+  end
+end
+
+
+
+
+# Pattern matching arcflow's creator file naming: creator_{entity_type}_{id}
+CREATOR_ID_PATTERN = /^creator_(#{ENTITY_TYPES.join('|')})_\d+$/
+
+# Helper to build and validate creator IDs
+def build_creator_id(entity_type, id_number)
+  creator_id = "creator_#{entity_type}_#{id_number}"
+  unless creator_id =~ CREATOR_ID_PATTERN
+    raise ArgumentError, "Invalid creator ID: #{creator_id} doesn't match pattern"
+  end
+  creator_id
+end
+
+# Helper to convert ArchivesSpace URI to Solr creator ID
+def aspace_uri_to_solr_id(uri)
+  return nil unless uri
+  # Match: /agents/{type}/{id} or https://.../agents/{type}/{id}
+  if uri =~ /agents\/(#{ENTITY_TYPES.join('|')})\/(\d+)/
+    build_creator_id($1, $2)
   end
 end

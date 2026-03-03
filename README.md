@@ -14,14 +14,12 @@ pip install -r requirements.txt
 cp .archivessnake.yml.example .archivessnake.yml
 nano .archivessnake.yml  # Add your ArchivesSpace credentials
 
-# 3. Set environment variables
-export ARCLIGHT_DIR=/path/to/your/arclight-app
-export ASPACE_DIR=/path/to/your/archivesspace
-export SOLR_URL=http://localhost:8983/solr/blacklight-core
-
-# 4. Run arcflow
-python -m arcflow.main 
-
+# 3. Run arcflow
+python -m arcflow.main \
+  --arclight-dir /path/to/your/arclight-app \
+  --aspace-dir /path/to/your/archivesspace \
+  --solr-url http://localhost:8983/solr/blacklight-core \
+  --aspace-solr-url http://localhost:8983/solr/archivesspace
 ```
 
 ---
@@ -199,7 +197,9 @@ Optional arguments:
 python -m arcflow.main \
   --arclight-dir /path/to/arclight \
   --aspace-dir /path/to/archivesspace \
-  --solr-url http://localhost:8983/solr/blacklight-core
+  --solr-url http://localhost:8983/solr/blacklight-core \
+  --aspace-solr-url http://localhost:8983/solr/archivesspace
+
 ```
 
 **Process only agents (skip collections):**
@@ -208,6 +208,7 @@ python -m arcflow.main \
   --arclight-dir /path/to/arclight \
   --aspace-dir /path/to/archivesspace \
   --solr-url http://localhost:8983/solr/blacklight-core \
+  --aspace-solr-url http://localhost:8983/solr/archivesspace \
   --agents-only
 ```
 
@@ -217,6 +218,7 @@ python -m arcflow.main \
   --arclight-dir /path/to/arclight \
   --aspace-dir /path/to/archivesspace \
   --solr-url http://localhost:8983/solr/blacklight-core \
+  --aspace-solr-url http://localhost:8983/solr/archivesspace \
   --force-update
 ```
 
