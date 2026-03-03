@@ -541,7 +541,7 @@ class ArcFlow:
                             ead_id.replace('.', '-'),  # dashes in Solr
                             f'{xml_dir}/{ead_id}.xml', # dots in filenames
                             f'{pdf_dir}/{ead_id}.pdf', 
-                            indent=4)
+                            indent_size=4)
                     else:
                         self.log.error(f'{" " * (indent_size+2)}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
 
@@ -1207,7 +1207,7 @@ class ArcFlow:
         except requests.exceptions.RequestException as e:
             self.log.error(f'{indent}Error deleting Solr record {solr_record_id} from ArcLight Solr: {e}')
 
-    def delete_file(self, file_path, indent_side=0):
+    def delete_file(self, file_path, indent_size=0):
         indent = ' ' * indent_size
 
         try:
@@ -1218,21 +1218,19 @@ class ArcFlow:
 
     def delete_ead(self, resource_id, ead_id,
             xml_file_path, pdf_file_path, indent_size=0):
-        indent = ' ' * indent_size
         # delete from solr
         deleted_solr_record = self.delete_arclight_solr_record(ead_id, indent_size=indent_size)
         if deleted_solr_record:
-            self.delete_file(pdf_file_path, indent=indent)
-            self.delete_file(xml_file_path, indent=indent)
+            self.delete_file(pdf_file_path, indent_size=indent_size)
+            self.delete_file(xml_file_path, indent_size=indent_size)
             # delete symlink if exists
             symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
-            self.delete_file(symlink_path, indent=indent)
+            self.delete_file(symlink_path, indent_size=indent_size)
 
     def delete_creator(self, file_path, solr_id, indent_size=0):
-        indent = ' ' * indent_size
         deleted_solr_record = self.delete_arclight_solr_record(solr_id, indent_size=indent_size)
         if deleted_solr_record:
-            self.delete_file(file_path, indent=indent)
+            self.delete_file(file_path, indent_size=indent_size)
 
 
 
