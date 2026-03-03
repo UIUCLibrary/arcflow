@@ -880,6 +880,7 @@ class ArcFlow:
             
             # Save EAC-CPF XML to file
             filename = f'{agents_dir}/{creator_id}.xml'
+            os.makedirs(agents_dir, exist_ok=True)
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(eac_cpf_xml)
             
