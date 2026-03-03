@@ -40,7 +40,7 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False, pdf_timeout_queued=300, pdf_timeout_running=1800):
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
         self.batch_size = 1000
@@ -54,6 +54,12 @@ class ArcFlow:
         self.collections_only = collections_only
         self.arcuit_dir = arcuit_dir
         self.skip_creator_indexing = skip_creator_indexing
+        self.agents_only = agents_only
+        self.collections_only = collections_only
+        self.arcuit_dir = arcuit_dir
+        self.skip_creator_indexing = skip_creator_indexing
+        self.pdf_timeout_queued = pdf_timeout_queued  # Timeout for jobs stuck in "queued" status
+        self.pdf_timeout_running = pdf_timeout_running  # Timeout for jobs actively "running"
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -243,23 +249,23 @@ class ArcFlow:
             if xml.content:
                 xml_content = xml.content.decode('utf-8')
                 insert_pos = xml_content.find('<archdesc level="collection">')
-                
+
                 if insert_pos != -1:
                     # Find the position after the closing </did> tag
                     did_end_pos = xml_content.find('</did>', insert_pos)
-                    
+
                     if did_end_pos != -1:
                         # Move to after the </did> tag
                         did_end_pos += len('</did>')
                         extra_xml = ''
-                        
+
                         # Add record group and subgroup labels
                         rg_label, sg_label = extract_labels(resource)[1:3]
                         if rg_label:
                             extra_xml += f'\n<recordgroup>{xml_escape(rg_label)}</recordgroup>'
                             if sg_label:
                                 extra_xml += f'\n<subgroup>{xml_escape(sg_label)}</subgroup>'
-                        
+
                         # Handle biographical/historical notes from creator agents
                         bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
                         if bioghist_content:
@@ -267,26 +273,26 @@ class ArcFlow:
                             # Search for existing bioghist after </did> but before </archdesc>
                             archdesc_end = xml_content.find('</archdesc>', did_end_pos)
                             search_section = xml_content[did_end_pos:archdesc_end] if archdesc_end != -1 else xml_content[did_end_pos:]
-                            
+
                             # Look for closing </bioghist> tag
                             existing_bioghist_end = search_section.rfind('</bioghist>')
-                            
+
                             if existing_bioghist_end != -1:
                                 # Found existing bioghist - insert agent elements INSIDE it (before closing tag)
                                 insert_pos = did_end_pos + existing_bioghist_end
-                                xml_content = (xml_content[:insert_pos] + 
-                                    f'\n{bioghist_content}\n' + 
+                                xml_content = (xml_content[:insert_pos] +
+                                    f'\n{bioghist_content}\n' +
                                     xml_content[insert_pos:])
                             else:
                                 # No existing bioghist - wrap agent elements in parent container
                                 wrapped_content = f'<bioghist>\n{bioghist_content}\n</bioghist>'
                                 extra_xml += f'\n{wrapped_content}'
-                        
+
                         if extra_xml:
-                            xml_content = (xml_content[:did_end_pos] + 
-                                extra_xml + 
+                            xml_content = (xml_content[:did_end_pos] +
+                                extra_xml +
                                 xml_content[did_end_pos:])
-                
+
                 xml_content = xml_content.encode('utf-8')
             else:
                 xml_content = xml.content
@@ -351,18 +357,105 @@ class ArcFlow:
 
 
     def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir, indent_size=0):
+        """
+        Wait for an ArchivesSpace PDF generation job to complete and save the result.
+
+        Uses a two-phase timeout approach:
+        - Phase 1 (queued): Short timeout to detect if background processor isn't running
+        - Phase 2 (running): Longer timeout to allow large PDFs to complete
+
+        Args:
+            repo_uri: Repository URI
+            job_id: Job ID in ArchivesSpace
+            ead_id: EAD identifier for the resource
+            pdf_dir: Directory to save PDF files
+            indent_size: Indentation level for logging
+
+        Returns:
+            True if successful, False if timeout or job failed
+        """
         indent = ' ' * indent_size
+        start_time = time.time()
+        poll_interval = 5  # seconds between status checks
+        warning_threshold = 60  # warn if queued for more than 1 minute
+        last_warning_time = 0
+        poll_count = 0
+
+        # Track status transitions for smart timeout
+        status_start_times = {}  # Track when each status began
+        current_timeout = self.pdf_timeout_queued  # Start with queued timeout
+
         while True:
-            job_status = self.client.get(
-                f'{repo_uri}/jobs/{job_id}').json()['status']
+            elapsed_time = time.time() - start_time
+
+            # Check for timeout (with appropriate timeout for current status)
+            if elapsed_time > current_timeout:
+                # Determine which phase timed out for appropriate error message
+                last_status = list(status_start_times.keys())[-1] if status_start_times else 'queued'
+
+                if last_status == 'queued':
+                    self.log.error(
+                        f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'after {int(elapsed_time)} seconds. Job stuck in queued status.\n'
+                        f'{indent}TROUBLESHOOTING: Background job processing may not be enabled in ArchivesSpace:\n'
+                        f'{indent}  1. Check config/config.rb: AppConfig[:job_thread_count] must be > 0 (default is 2)\n'
+                        f'{indent}  2. If you changed the config, restart ArchivesSpace: ./archivesspace.sh restart\n'
+                        f'{indent}  3. Verify ArchivesSpace is processing jobs in the web UI: System → Background Jobs\n'
+                        f'{indent}  4. Check ArchivesSpace logs for errors: logs/archivesspace.out\n'
+                        f'{indent}Continuing without PDF for "{ead_id}"...'
+                    )
+                else:
+                    self.log.error(
+                        f'{indent}Timeout waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'after {int(elapsed_time)} seconds in "{last_status}" status.\n'
+                        f'{indent}This may be a very large PDF taking longer than expected.\n'
+                        f'{indent}Consider increasing timeout with: --pdf-timeout-running {int(current_timeout * 2)}\n'
+                        f'{indent}Continuing without PDF for "{ead_id}"...'
+                    )
+
+                # Create empty PDF file and continue
+                self.save_file(
+                    f'{pdf_dir}/{ead_id}.pdf',
+                    b'',
+                    'PDF (empty - job timed out)',
+                    indent_size=indent_size)
+                return False
+
+            try:
+                job_status = self.client.get(
+                    f'{repo_uri}/jobs/{job_id}').json()['status']
+            except Exception as e:
+                self.log.error(f'{indent}Error checking job status for {self.job_type}_{job_id}: {e}')
+                time.sleep(poll_interval)
+                continue
+
+            # Track status transitions and adjust timeout accordingly
+            if job_status not in status_start_times:
+                status_start_times[job_status] = time.time()
+
+                # When job transitions from queued to running, switch to running timeout
+                if job_status == 'running' and 'queued' in status_start_times:
+                    time_in_queued = status_start_times[job_status] - status_start_times['queued']
+                    # Reset timeout clock for running phase
+                    start_time = time.time()
+                    current_timeout = self.pdf_timeout_running
+                    self.log.info(
+                        f'{indent}Job {self.job_type}_{job_id} transitioned to "running" '
+                        f'after {int(time_in_queued)}s in queue. '
+                        f'Now allowing up to {int(self.pdf_timeout_running)}s for PDF generation...'
+                    )
 
             if job_status in ('completed', 'canceled', 'failed'):
                 if job_status == 'completed':
-                    file_id = self.client.get(
-                        f'{repo_uri}/jobs/{job_id}/output_files').json()[0]
+                    try:
+                        file_id = self.client.get(
+                            f'{repo_uri}/jobs/{job_id}/output_files').json()[0]
 
-                    pdf = self.client.get(
-                        f'{repo_uri}/jobs/{job_id}/output_files/{file_id}')
+                        pdf = self.client.get(
+                            f'{repo_uri}/jobs/{job_id}/output_files/{file_id}')
+                    except Exception as e:
+                        self.log.error(f'{indent}Error retrieving PDF output for {self.job_type}_{job_id}: {e}')
+                        pdf = None
                 elif job_status in ('canceled', 'failed'):
                     self.log.error(f'{indent}ArchivesSpace {self.job_type}_{job_id} {job_status}.')
                     pdf = None
@@ -390,11 +483,34 @@ class ArcFlow:
                     'PDF', 
                     indent_size=indent_size)
 
-                self.log.info(f'Finished processing "{ead_id}".')
+                self.log.info(f'{indent}Finished processing "{ead_id}" (status: {job_status}).')
                 return True
 
-            self.log.info(f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} to complete... (current status: {job_status})')
-            time.sleep(5)
+            # Enhanced logging for queued jobs
+            poll_count += 1
+            if job_status == 'queued':
+                # Show warning if job has been queued for too long
+                if elapsed_time > warning_threshold and (elapsed_time - last_warning_time) > warning_threshold:
+                    self.log.warning(
+                        f'{indent}Job {self.job_type}_{job_id} has been queued for {int(elapsed_time)} seconds. '
+                        f'This may indicate the ArchivesSpace background job processor is not running.'
+                    )
+                    last_warning_time = elapsed_time
+
+                # Only log every 4th poll (every 20 seconds) to reduce log spam
+                if poll_count % 4 == 0:
+                    self.log.info(
+                        f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} '
+                        f'(status: {job_status}, elapsed: {int(elapsed_time)}s, timeout in: {int(current_timeout - elapsed_time)}s)'
+                    )
+            else:
+                # For non-queued statuses (running, etc.), log every time
+                self.log.info(
+                    f'{indent}Waiting for ArchivesSpace {self.job_type}_{job_id} '
+                    f'(status: {job_status}, elapsed: {int(elapsed_time)}s)'
+                )
+
+            time.sleep(poll_interval)
 
 
     def update_eads(self):
@@ -407,7 +523,7 @@ class ArcFlow:
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
         modified_since = int(self.last_updated.timestamp())
-        
+
         if self.force_update or modified_since <= 0:
             modified_since = 0
             # delete all EADs and related files in ArcLight Solr
@@ -571,11 +687,11 @@ class ArcFlow:
                 cwd=self.arclight_dir
             )
             arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
-            
+
             if not arclight_path:
                 self.log.error(f'{indent}Could not find arclight gem path')
                 return
-            
+
             traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
             xml_files = glob.glob(xml_file_path)  # Returns list of matching files
             cmd = [
@@ -588,7 +704,7 @@ class ArcFlow:
                 '-i', 'xml',
                 '-c', traject_config,
             ] + xml_files
-            
+
             if self.traject_extra_config:
                 if isinstance(self.traject_extra_config, (list, tuple)):
                     cmd.extend(self.traject_extra_config)
@@ -623,10 +739,10 @@ class ArcFlow:
         """
         indent = ' ' * indent_size
         bioghist_elements = []
-        
+
         if 'linked_agents' not in resource:
             return None
-        
+
         # Process linked_agents in order to maintain consistency with origination order
         for linked_agent in resource['linked_agents']:
             # Only process agents with 'creator' role
@@ -635,10 +751,10 @@ class ArcFlow:
                 if agent_ref:
                     try:
                         agent = self.client.get(agent_ref).json()
-                        
+
                         # Get agent name for head element
                         agent_name = agent.get('title') or agent.get('display_name', {}).get('sort_name', 'Unknown')
-                        
+
                         # Check for notes in the agent record
                         if 'notes' in agent:
                             for note in agent['notes']:
@@ -650,7 +766,7 @@ class ArcFlow:
                                         self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist for agent {agent_ref}')
                                         # Skip creating id attribute if persistent_id is missing
                                         persistent_id = None
-                                    
+
                                     # Extract note content from subnotes
                                     paragraphs = []
                                     if 'subnotes' in note:
@@ -672,7 +788,7 @@ class ArcFlow:
                                                 # Wrap each line in <p> tags
                                                 for line in lines:
                                                     paragraphs.append(f'<p>{line}</p>')
-                                    
+
                                     # Create nested bioghist element if we have paragraphs
                                     if paragraphs:
                                         paragraphs_xml = '\n'.join(paragraphs)
@@ -685,7 +801,7 @@ class ArcFlow:
                                         bioghist_elements.append(bioghist_el)
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
-        
+
         if bioghist_elements:
             # Return the agent bioghist elements (unwrapped)
             # The caller will decide whether to wrap them based on whether
@@ -828,18 +944,18 @@ class ArcFlow:
         """
         Process a single agent and generate a creator document in EAC-CPF XML format.
         Retrieves EAC-CPF directly from ArchivesSpace archival_contexts endpoint.
-        
+
         Args:
             agent_uri: Agent URI from ArchivesSpace (e.g., '/agents/corporate_entities/123')
             agents_dir: Directory to save agent XML files
             repo_id: Repository ID to use for archival_contexts endpoint (default: 1)
             indent_size: Indentation size for logging
-            
+
         Returns:
             str: Creator document ID if successful, None otherwise
         """
         indent = ' ' * indent_size
-        
+
         try:
             # Parse agent URI to extract type and ID
             # URI format: /agents/{agent_type}/{id}
@@ -847,25 +963,25 @@ class ArcFlow:
             if len(parts) != 3 or parts[0] != 'agents':
                 self.log.error(f'{indent}Invalid agent URI format: {agent_uri}')
                 return None
-            
+
             agent_type = parts[1]  # e.g., 'corporate_entities', 'people', 'families'
             agent_id = parts[2]
-            
+
             # Construct EAC-CPF endpoint
             # Format: /repositories/{repo_id}/archival_contexts/{agent_type}/{id}.xml
             eac_cpf_endpoint = f'/repositories/{repo_id}/archival_contexts/{agent_type}/{agent_id}.xml'
-            
+
             self.log.debug(f'{indent}Fetching EAC-CPF from: {eac_cpf_endpoint}')
-            
+
             # Fetch EAC-CPF XML
             response = self.client.get(eac_cpf_endpoint)
-            
+
             if response.status_code != 200:
                 self.log.error(f'{indent}Failed to fetch EAC-CPF for {agent_uri}: HTTP {response.status_code}')
                 return None
-            
+
             eac_cpf_xml = response.text
-            
+
             # Parse the EAC-CPF XML to validate and inspect its structure
             try:
                 root = ET.fromstring(eac_cpf_xml)
@@ -873,18 +989,18 @@ class ArcFlow:
             except ET.ParseError as e:
                 self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
                 return None
-            
+
             # Generate creator ID
             creator_id = f'creator_{agent_type}_{agent_id}'
-            
+
             # Save EAC-CPF XML to file
             filename = f'{agents_dir}/{creator_id}.xml'
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(eac_cpf_xml)
-            
+
             self.log.info(f'{indent}Created creator document: {creator_id}')
             return creator_id
-            
+
         except Exception as e:
             self.log.error(f'{indent}Error processing agent {agent_uri}: {e}')
             import traceback
@@ -956,12 +1072,12 @@ class ArcFlow:
     def find_traject_config(self):
         """
         Find the traject config for creator indexing.
-        
+
         Search order (follows collection records pattern):
         1. arcuit_dir if provided (most up-to-date user control)
         2. arcuit gem via bundle show (for backward compatibility)
         3. example_traject_config_eac_cpf.rb in arcflow (fallback when used as module without arcuit)
-        
+
         Returns:
             str: Path to traject config, or None if not found
         """
@@ -1039,38 +1155,38 @@ class ArcFlow:
     def index_creators(self, agents_dir, creator_ids, batch_size=100):
         """
         Index creator XML files to Solr using traject.
-        
+
         Args:
             agents_dir: Directory containing creator XML files
             creator_ids: List of creator IDs to index
             batch_size: Number of files to index per traject call (default: 100)
-        
+
         Returns:
             int: Number of successfully indexed creators
         """
         traject_config = self.find_traject_config()
         if not traject_config:
             return 0
-        
+
         indexed_count = 0
         failed_count = 0
-        
+
         # Process in batches to avoid command line length limits
         total_batches = math.ceil(len(creator_ids) / batch_size)
         for i in range(0, len(creator_ids), batch_size):
             batch = creator_ids[i:i+batch_size]
             batch_num = (i // batch_size) + 1
-            
+
             # Build list of XML files for this batch
             xml_files = [f'{agents_dir}/{cid}.xml' for cid in batch]
-            
+
             # Filter to only existing files
             existing_files = [f for f in xml_files if os.path.exists(f)]
-            
+
             if not existing_files:
                 self.log.warning(f'  Batch {batch_num}/{total_batches}: No files found, skipping')
                 continue
-            
+
             try:
                 cmd = [
                     'bundle', 'exec', 'traject',
@@ -1078,16 +1194,16 @@ class ArcFlow:
                     '-i', 'xml',
                     '-c', traject_config
                 ] + existing_files
-                
+
                 self.log.info(f'  Indexing batch {batch_num}/{total_batches}: {len(existing_files)} files')
-                
+
                 result = subprocess.run(
                     cmd,
                     cwd=self.arclight_dir,
                     stderr=subprocess.PIPE,
                     timeout=300  # 5 minute timeout per batch
                 )
-                
+
                 if result.returncode == 0:
                     indexed_count += len(existing_files)
                     self.log.info(f'  Successfully indexed {len(existing_files)} creators')
@@ -1096,7 +1212,7 @@ class ArcFlow:
                     self.log.error(f'  Traject failed with exit code {result.returncode}')
                     if result.stderr:
                         self.log.error(f'  STDERR: {result.stderr.decode("utf-8")}')
-                    
+
             except subprocess.TimeoutExpired:
                 self.log.error(f'  Traject timed out for batch {batch_num}/{total_batches}')
                 failed_count += len(existing_files)
@@ -1106,7 +1222,7 @@ class ArcFlow:
 
         if failed_count > 0:
             self.log.warning(f'Creator indexing completed with errors: {indexed_count} succeeded, {failed_count} failed')
-        
+
         return indexed_count
 
 
@@ -1250,15 +1366,15 @@ class ArcFlow:
         Run the ArcFlow process.
         """
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
-        
+
         # Update repositories (unless agents-only mode)
         if not self.agents_only:
             self.update_repositories()
-        
+
         # Update collections/EADs (unless agents-only mode)
         if not self.agents_only:
             self.update_eads()
-        
+
         # Update creator records (unless collections-only mode)
         if not self.collections_only:
             self.process_creators()
@@ -1273,7 +1389,7 @@ class ArcFlow:
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
 
-    
+
 
 
 def main():
@@ -1318,12 +1434,22 @@ def main():
         '--skip-creator-indexing',
         action='store_true',
         help='Generate creator XML files but skip Solr indexing (for testing)',)
+    parser.add_argument(
+        '--pdf-timeout-queued',
+        type=int,
+        default=300,
+        help='Timeout in seconds for PDF jobs stuck in "queued" status (default: 300 = 5 minutes)',)
+    parser.add_argument(
+        '--pdf-timeout-running',
+        type=int,
+        default=1800,
+        help='Timeout in seconds for PDF jobs in "running" status (default: 1800 = 30 minutes)',)
     args = parser.parse_args()
-    
+
+
     # Validate mutually exclusive flags
     if args.agents_only and args.collections_only:
         parser.error('Cannot use both --agents-only and --collections-only')
-
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
@@ -1334,7 +1460,9 @@ def main():
         agents_only=args.agents_only,
         collections_only=args.collections_only,
         arcuit_dir=args.arcuit_dir,
-        skip_creator_indexing=args.skip_creator_indexing)
+        skip_creator_indexing=args.skip_creator_indexing,
+        pdf_timeout_queued=args.pdf_timeout_queued,
+        pdf_timeout_running=args.pdf_timeout_running)
     arcflow.run()
 
 
