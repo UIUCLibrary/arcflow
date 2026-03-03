@@ -408,33 +408,9 @@ class ArcFlow:
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
         modified_since = int(self.last_updated.timestamp())
-        
+
         if self.force_update or modified_since <= 0:
             modified_since = 0
-            # delete all EADs and related files in ArcLight Solr
-            try:
-                response = requests.post(
-                    f'{self.solr_url}/update?commit=true',
-                    json={'delete': {'query': '*:*'}},
-                )
-                if response.status_code == 200:
-                    self.log.info('Deleted all EADs and Creators from ArcLight Solr.')
-                    # delete related directories after suscessful
-                    # deletion from solr
-                    for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
-                        try:
-                            shutil.rmtree(dir_path)
-                            self.log.info(f'Deleted {dir_name} directory {dir_path}.')
-                        except Exception as e:
-                            self.log.error(f'Error deleting {dir_name} directory "{dir_path}": {e}')
-                else:
-                    self.log.error(f'Failed to delete all EADs from Arclight Solr. Status code: {response.status_code}')
-            except requests.exceptions.RequestException as e:
-                self.log.error(f'Error deleting all EADs and Creators from ArcLight Solr: {e}')
-
-        # create directories if don't exist
-        for dir_path in (resource_dir, pdf_dir):
-            os.makedirs(dir_path, exist_ok=True)
 
         # process resources that have been modified in ArchivesSpace since last update
         self.log.info('Fetching resources from ArchivesSpace...')
@@ -909,9 +885,6 @@ class ArcFlow:
 
         self.log.info(f'{indent}Processing creator agents...')
 
-        # Create agents directory if it doesn't exist
-        os.makedirs(agents_dir, exist_ok=True)
-
         # Get agents to process
         agents = self.get_all_agents(modified_since=modified_since, indent_size=indent_size)
 
@@ -1260,7 +1233,45 @@ class ArcFlow:
         # Determine what needs to run
         needs_collections = not self.agents_only
         needs_creators = not self.collections_only
-        
+
+        # --- Directory setup: teardown (if force_update) then creation ---
+        # This is done here, before any parallel work, so all workers start
+        # with a consistent, fully-prepared directory layout.
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        resource_dir = f'{xml_dir}/resources'
+        agents_dir = f'{xml_dir}/agents'
+        pdf_dir = f'{self.arclight_dir}/public/pdf'
+
+        if needs_collections and (self.force_update or int(self.last_updated.timestamp()) <= 0):
+            # Delete all EADs and Creators from Solr, then wipe output directories.
+            # Only triggered when collections are being processed, since the Solr
+            # delete covers all record types and directory teardown covers xml_dir.
+            try:
+                response = requests.post(
+                    f'{self.solr_url}/update?commit=true',
+                    json={'delete': {'query': '*:*'}},
+                )
+                if response.status_code == 200:
+                    self.log.info('Deleted all EADs and Creators from ArcLight Solr.')
+                    for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
+                        try:
+                            shutil.rmtree(dir_path)
+                            self.log.info(f'Deleted {dir_name} directory {dir_path}.')
+                        except Exception as e:
+                            self.log.error(f'Error deleting {dir_name} directory "{dir_path}": {e}')
+                else:
+                    self.log.error(f'Failed to delete all EADs from Arclight Solr. Status code: {response.status_code}')
+            except requests.exceptions.RequestException as e:
+                self.log.error(f'Error deleting all EADs and Creators from ArcLight Solr: {e}')
+
+        # Create all needed output directories now, after any teardown,
+        # so every parallel worker starts with the directories in place.
+        if needs_collections:
+            for dir_path in (resource_dir, pdf_dir):
+                os.makedirs(dir_path, exist_ok=True)
+        if needs_creators:
+            os.makedirs(agents_dir, exist_ok=True)
+
         if needs_collections and needs_creators:
             # Run both in parallel using ThreadPoolExecutor
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
