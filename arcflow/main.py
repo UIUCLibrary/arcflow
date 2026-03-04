@@ -1323,10 +1323,12 @@ class ArcFlow:
 
     def run_all(self):
         """
-        Run all record-type workflows in parallel.
+        Run all record-type workflows.
+        Updates repository metadata, then runs all record-type workflows in parallel.
         This is the default execution path. When new record-type workflows
         are introduced, add them here.
         """
+        self.update_repositories()
         workflows = [self.run_collections, self.run_creators]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
             self.log.info('Running collections and creators in parallel...')
@@ -1345,14 +1347,12 @@ class ArcFlow:
 
         if self.collections_only:
             scope = 'collections'
-            self.update_repositories()
             self.run_collections()
         elif self.agents_only:
             scope = 'creators'
             self.run_creators()
         else:
             scope = 'all'
-            self.update_repositories()
             self.run_all()
 
         # Skip deleted record processing on force_update or if all active
