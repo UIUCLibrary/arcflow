@@ -61,9 +61,9 @@ This filtering ensures that only legitimate archival creators are discoverable i
 
 ### How Creator Records Work
 
-1. **Extraction**: `get_all_agents()` fetches all agents from ArchivesSpace
-2. **Filtering**: `is_target_agent()` filters out system users, donors, and non-creator agents  
-3. **Processing**: `task_agent()` generates an EAC-CPF XML document for each target agent with bioghist notes
+1. **Extraction**: Agent data is exported from ArchivesSpace for use in creator records
+2. **Filtering**: Creator vs. non-creator agents are determined via Solr queries built from `_get_target_agent_criteria()` and `_get_nontarget_agent_criteria()`, which exclude system users, donors, and other non-creator agents  
+3. **Processing**: For each target creator agent, ArcFlow generates an EAC-CPF XML document that includes bioghist notes
 4. **Linking**: Handled via Solr using the persistent_id field (agents and collections linked through bioghist references)
 5. **Indexing**: Creator XML files are indexed to Solr using `traject_config_eac_cpf.rb`
 
@@ -182,7 +182,8 @@ python -m arcflow.main --arclight-dir /path --aspace-dir /path --solr-url http:/
 Required arguments:
 - `--arclight-dir` - Path to ArcLight installation directory
 - `--aspace-dir` - Path to ArchivesSpace installation directory
-- `--solr-url` - URL of the Solr core (e.g., http://localhost:8983/solr/blacklight-core)
+- `--solr-url` - URL of the ArcLight Solr core (e.g., http://localhost:8983/solr/blacklight-core)
+- `--aspace-solr-url` URL of the ASpace Solr core 
 
 Optional arguments:
 - `--force-update` - Force update of all data (recreates everything from scratch)
