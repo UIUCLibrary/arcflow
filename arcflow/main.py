@@ -1277,7 +1277,7 @@ class ArcFlow:
                 )
                 if response.status_code == 200:
                     self.log.info('Deleted all collection records from ArcLight Solr.')
-                    for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
+                    for dir_path, dir_name in [(resource_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
                         try:
                             shutil.rmtree(dir_path)
                             self.log.info(f'Deleted {dir_name} directory {dir_path}.')
