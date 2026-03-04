@@ -540,7 +540,7 @@ class ArcFlow:
                         self.delete_ead(
                             resource_id,
                             ead_id.replace('.', '-'),  # dashes in Solr
-                            f'{xml_dir}/{ead_id}.xml', # dots in filenames
+                            f'{resource_dir}/{ead_id}.xml',  # dots in filenames
                             f'{pdf_dir}/{ead_id}.pdf',
                             indent_size=4)
                     else:
