@@ -68,7 +68,7 @@ class ArcFlow:
         self.start_time = int(time.time())
         try:
             with open(self.arcflow_file_path, 'r') as file:
-                config = yaml.safe_load(file)
+                config = yaml.safe_load(file) or {}
             try:
                 date_fmt = '%Y-%m-%dT%H:%M:%S%z'
                 epoch = datetime.fromtimestamp(0, timezone.utc)
