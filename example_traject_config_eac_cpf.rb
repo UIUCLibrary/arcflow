@@ -22,11 +22,12 @@ extend TrajectPlus::Macros
 # EAC-CPF namespace - used consistently throughout this config
 EAC_NS = { 'eac' => 'urn:isbn:1-931666-33-4' }
 
-# Pattern matching arcflow's creator file naming: creator_{entity_type}_{id}
-CREATOR_ID_PATTERN = /^creator_(corporate_entities|people|families)_\d+$/
-
 # Entity types - SINGLE SOURCE OF TRUTH
 ENTITY_TYPES = ['corporate_entities', 'people', 'families']
+
+# Pattern matching arcflow's creator file naming: creator_{entity_type}_{id}
+
+CREATOR_ID_PATTERN = /^creator_(#{ENTITY_TYPES.join('|')})_\d+$/
 
 settings do
   provide "solr.url", ENV['SOLR_URL'] || "http://localhost:8983/solr/blacklight-core"
@@ -249,12 +250,6 @@ each_record do |record, context|
     context.logger.info("Indexed creator: #{record_id.text}")
   end
 end
-
-
-
-
-# Pattern matching arcflow's creator file naming: creator_{entity_type}_{id}
-CREATOR_ID_PATTERN = /^creator_(#{ENTITY_TYPES.join('|')})_\d+$/
 
 # Helper to build and validate creator IDs
 def build_creator_id(entity_type, id_number)
