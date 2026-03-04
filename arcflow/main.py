@@ -406,7 +406,7 @@ class ArcFlow:
             time.sleep(5)
 
 
-    def update_eads(self):
+    def process_collections(self):
         """
         Update EADs in ArcLight with the latest data from resources in 
         ArchivesSpace.
@@ -1248,39 +1248,27 @@ class ArcFlow:
             self.log.error(f'Error writing to file .arcflow.yml: {e}')
 
 
-    def run(self):
+    def run_collections(self):
         """
-        Run the ArcFlow process.
+        Teardown (if force_update or first run), set up directories, and
+        process collection EADs.
         """
-        self.log.info(f'ArcFlow process started (PID: {self.pid}).')
-        
-        # Update repositories (unless agents-only mode)
-        if not self.agents_only:
-            self.update_repositories()
-        
-        # Determine what needs to run
-        needs_collections = not self.agents_only
-        needs_creators = not self.collections_only
-
-        # --- Directory setup: teardown (if force_update) then creation ---
-        # This is done here, before any parallel work, so all workers start
-        # with a consistent, fully-prepared directory layout.
         xml_dir = f'{self.arclight_dir}/public/xml'
         resource_dir = f'{xml_dir}/resources'
-        agents_dir = f'{xml_dir}/agents'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        if needs_collections and (self.force_update or int(self.last_updated_collections.timestamp()) <= 0):
-            # Delete all EADs and Creators from Solr, then wipe output directories.
-            # Only triggered when collections are being processed, since the Solr
-            # delete covers all record types and directory teardown covers xml_dir.
+        if self.force_update or int(self.last_updated_collections.timestamp()) <= 0:
+            # Delete only collection records from Solr so that creator records
+            # remain intact when collections are rebuilt independently.
+            # Standard query parser: '*:* AND NOT is_creator:true' matches all
+            # documents except those flagged as creators.
             try:
                 response = requests.post(
                     f'{self.solr_url}/update?commit=true',
-                    json={'delete': {'query': '*:*'}},
+                    json={'delete': {'query': '*:* AND NOT is_creator:true'}},
                 )
                 if response.status_code == 200:
-                    self.log.info('Deleted all EADs and Creators from ArcLight Solr.')
+                    self.log.info('Deleted all collection records from ArcLight Solr.')
                     for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
                         try:
                             shutil.rmtree(dir_path)
@@ -1288,46 +1276,83 @@ class ArcFlow:
                         except Exception as e:
                             self.log.error(f'Error deleting {dir_name} directory "{dir_path}": {e}')
                 else:
-                    self.log.error(f'Failed to delete all EADs from Arclight Solr. Status code: {response.status_code}')
+                    self.log.error(f'Failed to delete collection records from ArcLight Solr. Status code: {response.status_code}')
             except requests.exceptions.RequestException as e:
-                self.log.error(f'Error deleting all EADs and Creators from ArcLight Solr: {e}')
+                self.log.error(f'Error deleting collection records from ArcLight Solr: {e}')
 
-        # Create all needed output directories now, after any teardown,
-        # so every parallel worker starts with the directories in place.
-        if needs_collections:
-            for dir_path in (resource_dir, pdf_dir):
-                os.makedirs(dir_path, exist_ok=True)
-        if needs_creators:
-            os.makedirs(agents_dir, exist_ok=True)
+        os.makedirs(resource_dir, exist_ok=True)
+        os.makedirs(pdf_dir, exist_ok=True)
+        self.process_collections()
 
-        if needs_collections and needs_creators:
-            # Run both in parallel using ThreadPoolExecutor
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                self.log.info('Running collections and creators in parallel...')
-                
-                collections_future = executor.submit(self.update_eads)
-                creators_future = executor.submit(self.process_creators)
-                
-                # Wait for both to complete
-                concurrent.futures.wait([collections_future, creators_future])
-                
-                # Check for exceptions
-                if collections_future.exception():
-                    self.log.error(f'Collections processing failed: {collections_future.exception()}')
-                if creators_future.exception():
-                    self.log.error(f'Creator processing failed: {creators_future.exception()}')
-                    
-        elif needs_collections:
-            self.update_eads()
-        elif needs_creators:
-            self.process_creators()
+
+    def run_creators(self):
+        """
+        Teardown (if force_update or first run), set up directories, and
+        process creator agents.
+        """
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        agents_dir = f'{xml_dir}/agents'
+
+        if self.force_update or int(self.last_updated_creators.timestamp()) <= 0:
+            # Delete only creator records from Solr (collections are handled separately).
+            try:
+                response = requests.post(
+                    f'{self.solr_url}/update?commit=true',
+                    json={'delete': {'query': 'is_creator:true'}},
+                )
+                if response.status_code == 200:
+                    self.log.info('Deleted all creator records from ArcLight Solr.')
+                    try:
+                        shutil.rmtree(agents_dir)
+                        self.log.info(f'Deleted agents directory {agents_dir}.')
+                    except Exception as e:
+                        self.log.error(f'Error deleting agents directory "{agents_dir}": {e}')
+                else:
+                    self.log.error(f'Failed to delete creator records from ArcLight Solr. Status code: {response.status_code}')
+            except requests.exceptions.RequestException as e:
+                self.log.error(f'Error deleting creator records from ArcLight Solr: {e}')
+
+        os.makedirs(agents_dir, exist_ok=True)
+        self.process_creators()
+
+
+    def run_all(self):
+        """
+        Run all record-type workflows in parallel.
+        This is the default execution path. When new record-type workflows
+        are introduced, add them here.
+        """
+        workflows = [self.run_collections, self.run_creators]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
+            self.log.info('Running collections and creators in parallel...')
+            futures = [executor.submit(w) for w in workflows]
+            concurrent.futures.wait(futures)
+            for future in futures:
+                if future.exception():
+                    self.log.error(f'Workflow failed: {future.exception()}')
+
+
+    def run(self):
+        """
+        Run the ArcFlow process.
+        """
+        self.log.info(f'ArcFlow process started (PID: {self.pid}).')
+
+        if self.collections_only:
+            self.update_repositories()
+            self.run_collections()
+        elif self.agents_only:
+            self.run_creators()
+        else:
+            self.update_repositories()
+            self.run_all()
 
         # Skip deleted record processing on force_update or if all active
         # timestamps indicate a first run (nothing has been indexed yet).
         active_timestamps = []
-        if needs_collections:
+        if not self.agents_only:
             active_timestamps.append(int(self.last_updated_collections.timestamp()))
-        if needs_creators:
+        if not self.collections_only:
             active_timestamps.append(int(self.last_updated_creators.timestamp()))
         if self.force_update or all(t <= 0 for t in active_timestamps):
             self.log.info('Skipping deleted record processing.')
@@ -1337,7 +1362,6 @@ class ArcFlow:
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
 
-    
 
 
 def main():
