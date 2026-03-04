@@ -1337,11 +1337,16 @@ class ArcFlow:
             self.log.info('Running collections and creators in parallel...')
             futures = [executor.submit(w) for w in workflows]
             concurrent.futures.wait(futures)
+            exceptions = []
             for future in futures:
-                if future.exception():
-                    self.log.error(f'Workflow failed: {future.exception()}')
-
-
+                exc = future.exception()
+                if exc is not None:
+                    self.log.error(f'Workflow failed: {exc}')
+                    exceptions.append(exc)
+            if exceptions:
+                # Raise the first exception to signal overall failure and prevent
+                # downstream deleted-record processing and config timestamp updates.
+                raise exceptions[0]
     def run(self):
         """
         Run the ArcFlow process.
