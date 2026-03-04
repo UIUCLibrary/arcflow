@@ -62,9 +62,9 @@ to_field 'id' do |record, accumulator, context|
   end
 end
 
-# Add is_creator marker field
+# Add is_creator boolean marker field
 to_field 'is_creator' do |record, accumulator|
-  accumulator << 'true'
+  accumulator << true
 end
 
 # # Record type

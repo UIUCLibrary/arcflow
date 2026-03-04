@@ -489,31 +489,36 @@ class ArcFlow:
 
 
 
-    def process_deleted_records(self):
+    def process_deleted_records(self, scope):
+        """
+        Process records deleted in ArchivesSpace since the last run.
 
+        scope: 'collections', 'creators', or 'all'
+            Determines which record types are checked for deletion and which
+            timestamp is used as the lower bound for the delete-feed query.
+        """
         xml_dir = f'{self.arclight_dir}/public/xml'
         resource_dir = f'{xml_dir}/resources'
         agent_dir = f'{xml_dir}/agents'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
-        # Use per-type timestamps; for mixed runs use the earlier of the two
-        # so no deletions are missed. Per-type filtering happens below.
-        if not self.agents_only and not self.collections_only:
+
+        # Use the earlier timestamp when both types are in scope so no
+        # deletions are missed.  Per-type filtering happens in the loop below.
+        if scope == 'all':
             modified_since = min(int(self.last_updated_collections.timestamp()),
                                  int(self.last_updated_creators.timestamp()))
-        elif not self.agents_only:
+        elif scope == 'collections':
             modified_since = int(self.last_updated_collections.timestamp())
-        else:
+        else:  # 'creators'
             modified_since = int(self.last_updated_creators.timestamp())
 
-        # process records that have been deleted since last update in ArchivesSpace
         resource_pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<record_id>\d+)$'
         agent_pattern = r'^/agents/(?P<agent_type>people|corporate_entities|families)/(?P<record_id>\d+)$'
-
 
         page = 1
         while True:
             deleted_records = self.client.get(
-                f'/delete-feed',
+                '/delete-feed',
                 params={
                     'page': page,
                     'modified_since': modified_since,
@@ -522,29 +527,29 @@ class ArcFlow:
             for record in deleted_records['results']:
                 resource_match = re.match(resource_pattern, record)
                 agent_match = re.match(agent_pattern, record)
-                if resource_match and not self.agents_only:
-                    resource_id = resource_match.group('resource_id')
-                    self.log.info(f'{" " * indent_size}Processing deleted resource ID {resource_id}...')
 
+                if resource_match and scope in ('collections', 'all'):
+                    resource_id = resource_match.group('record_id')
+                    self.log.info(f'Processing deleted resource ID {resource_id}...')
                     symlink_path = f'{resource_dir}/{resource_id}.xml'
                     ead_id = self.get_ead_from_symlink(symlink_path)
                     if ead_id:
                         self.delete_ead(
-                            resource_id, 
+                            resource_id,
                             ead_id.replace('.', '-'),  # dashes in Solr
                             f'{xml_dir}/{ead_id}.xml', # dots in filenames
-                            f'{pdf_dir}/{ead_id}.pdf', 
+                            f'{pdf_dir}/{ead_id}.pdf',
                             indent_size=4)
                     else:
-                        self.log.error(f'{" " * (indent_size+2)}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
+                        self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
 
-                if agent_match and not self.collections_only:
-                    agent_id = agent_match.group('agent_id')
-                    self.log.info(f'{" " * indent_size}Processing deleted agent ID {agent_id}...')
+                if agent_match and scope in ('creators', 'all'):
+                    agent_type = agent_match.group('agent_type')
+                    agent_id = agent_match.group('record_id')
+                    self.log.info(f'Processing deleted agent ID {agent_id}...')
                     file_path = f'{agent_dir}/{agent_id}.xml'
                     agent_solr_id = f'creator_{agent_type}_{agent_id}'
-                    self.delete_creator(file_path, agent_solr_id, indent_size)
-
+                    self.delete_creator(file_path, agent_solr_id)
 
             if deleted_records['last_page'] == page:
                 break
@@ -1339,25 +1344,28 @@ class ArcFlow:
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
 
         if self.collections_only:
+            scope = 'collections'
             self.update_repositories()
             self.run_collections()
         elif self.agents_only:
+            scope = 'creators'
             self.run_creators()
         else:
+            scope = 'all'
             self.update_repositories()
             self.run_all()
 
         # Skip deleted record processing on force_update or if all active
         # timestamps indicate a first run (nothing has been indexed yet).
         active_timestamps = []
-        if not self.agents_only:
+        if scope in ('collections', 'all'):
             active_timestamps.append(int(self.last_updated_collections.timestamp()))
-        if not self.collections_only:
+        if scope in ('creators', 'all'):
             active_timestamps.append(int(self.last_updated_creators.timestamp()))
         if self.force_update or all(t <= 0 for t in active_timestamps):
             self.log.info('Skipping deleted record processing.')
         else:
-            self.process_deleted_records()
+            self.process_deleted_records(scope)
 
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
