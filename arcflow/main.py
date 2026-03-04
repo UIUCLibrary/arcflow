@@ -142,13 +142,16 @@ class ArcFlow:
             self.log.info('Checking for updates on repositories information...')
 
             update_repos = False
+            # Use the oldest of the two run timestamps so that a repo change
+            # is detected regardless of which pipeline last ran.
+            last_updated = min(self.last_updated_collections, self.last_updated_creators)
             for repo in repos:
                 # python doesn't support Zulu timezone suffixes, 
                 # converting system_mtime and user_mtime to UTC offset notation
-                if (self.last_updated_collections <= datetime.strptime(
+                if (last_updated <= datetime.strptime(
                         repo['system_mtime'].replace('Z','+0000'),
                         '%Y-%m-%dT%H:%M:%S%z')
-                        or self.last_updated_collections <= datetime.strptime(
+                        or last_updated <= datetime.strptime(
                         repo['user_mtime'].replace('Z','+0000'),
                         '%Y-%m-%dT%H:%M:%S%z')):
                     update_repos = True
