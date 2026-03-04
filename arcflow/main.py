@@ -10,6 +10,7 @@ import re
 import logging
 import math
 import sys
+import concurrent.futures
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
 from xml.etree import ElementTree as ET
@@ -67,10 +68,15 @@ class ArcFlow:
         self.start_time = int(time.time())
         try:
             with open(self.arcflow_file_path, 'r') as file:
-                config = yaml.safe_load(file)
+                config = yaml.safe_load(file) or {}
             try:
-                self.last_updated = datetime.strptime(
-                    config['last_updated'], '%Y-%m-%dT%H:%M:%S%z')
+                date_fmt = '%Y-%m-%dT%H:%M:%S%z'
+                epoch = datetime.fromtimestamp(0, timezone.utc)
+                legacy_ts = config.get('last_updated')
+                collections_ts_str = config.get('last_updated_collections') or legacy_ts
+                creators_ts_str = config.get('last_updated_creators') or legacy_ts
+                self.last_updated_collections = datetime.strptime(collections_ts_str, date_fmt) if collections_ts_str else epoch
+                self.last_updated_creators = datetime.strptime(creators_ts_str, date_fmt) if creators_ts_str else epoch
             except Exception as e:
                 self.log.error(f'Error parsing last_updated date on file .arcflow.yml: {e}')
                 exit(0)
@@ -79,7 +85,8 @@ class ArcFlow:
                 self.log.error('File .arcflow.yml not found. Create the file and try again or run with --force-update to recreate EADs from scratch.')
                 exit(0)
             else:
-                self.last_updated = datetime.fromtimestamp(0, timezone.utc)
+                self.last_updated_collections = datetime.fromtimestamp(0, timezone.utc)
+                self.last_updated_creators = datetime.fromtimestamp(0, timezone.utc)
         try:
             with open(os.path.join(base_dir, '.archivessnake.yml'), 'r') as file:
                 config = yaml.safe_load(file)
@@ -135,13 +142,16 @@ class ArcFlow:
             self.log.info('Checking for updates on repositories information...')
 
             update_repos = False
+            # Use the oldest of the two run timestamps so that a repo change
+            # is detected regardless of which pipeline last ran.
+            last_updated = min(self.last_updated_collections, self.last_updated_creators)
             for repo in repos:
                 # python doesn't support Zulu timezone suffixes, 
                 # converting system_mtime and user_mtime to UTC offset notation
-                if (self.last_updated <= datetime.strptime(
+                if (last_updated <= datetime.strptime(
                         repo['system_mtime'].replace('Z','+0000'),
                         '%Y-%m-%dT%H:%M:%S%z')
-                        or self.last_updated <= datetime.strptime(
+                        or last_updated <= datetime.strptime(
                         repo['user_mtime'].replace('Z','+0000'),
                         '%Y-%m-%dT%H:%M:%S%z')):
                     update_repos = True
@@ -309,6 +319,7 @@ class ArcFlow:
                     f'{pdf_dir}/{prev_ead_id}.pdf', 
                     indent_size=indent_size)
 
+            os.makedirs(xml_dir, exist_ok=True)
             self.save_file(xml_file_path, xml_content, 'XML', indent_size=indent_size)
             self.create_symlink(
                 os.path.basename(xml_file_path),
@@ -384,6 +395,7 @@ class ArcFlow:
                 else:
                     pdf_content = b''   # empty PDF file
 
+                os.makedirs(pdf_dir, exist_ok=True)
                 self.save_file(
                     f'{pdf_dir}/{ead_id}.pdf', 
                     pdf_content, 
@@ -397,7 +409,7 @@ class ArcFlow:
             time.sleep(5)
 
 
-    def update_eads(self):
+    def process_collections(self):
         """
         Update EADs in ArcLight with the latest data from resources in 
         ArchivesSpace.
@@ -406,34 +418,10 @@ class ArcFlow:
         resource_dir = f'{xml_dir}/resources'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        modified_since = int(self.last_updated.timestamp())
-        
+        modified_since = int(self.last_updated_collections.timestamp())
+
         if self.force_update or modified_since <= 0:
             modified_since = 0
-            # delete all EADs and related files in ArcLight Solr
-            try:
-                response = requests.post(
-                    f'{self.solr_url}/update?commit=true',
-                    json={'delete': {'query': '*:*'}},
-                )
-                if response.status_code == 200:
-                    self.log.info('Deleted all EADs and Creators from ArcLight Solr.')
-                    # delete related directories after suscessful
-                    # deletion from solr
-                    for dir_path, dir_name in [(xml_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
-                        try:
-                            shutil.rmtree(dir_path)
-                            self.log.info(f'Deleted {dir_name} directory {dir_path}.')
-                        except Exception as e:
-                            self.log.error(f'Error deleting {dir_name} directory "{dir_path}": {e}')
-                else:
-                    self.log.error(f'Failed to delete all EADs from Arclight Solr. Status code: {response.status_code}')
-            except requests.exceptions.RequestException as e:
-                self.log.error(f'Error deleting all EADs and Creators from ArcLight Solr: {e}')
-
-        # create directories if don't exist
-        for dir_path in (resource_dir, pdf_dir):
-            os.makedirs(dir_path, exist_ok=True)
 
         # process resources that have been modified in ArchivesSpace since last update
         self.log.info('Fetching resources from ArchivesSpace...')
@@ -504,23 +492,36 @@ class ArcFlow:
 
 
 
-    def process_deleted_records(self):
+    def process_deleted_records(self, scope):
+        """
+        Process records deleted in ArchivesSpace since the last run.
 
+        scope: 'collections', 'creators', or 'all'
+            Determines which record types are checked for deletion and which
+            timestamp is used as the lower bound for the delete-feed query.
+        """
         xml_dir = f'{self.arclight_dir}/public/xml'
         resource_dir = f'{xml_dir}/resources'
         agent_dir = f'{xml_dir}/agents'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
-        modified_since = int(self.last_updated.timestamp())
 
-        # process records that have been deleted since last update in ArchivesSpace
+        # Use the earlier timestamp when both types are in scope so no
+        # deletions are missed.  Per-type filtering happens in the loop below.
+        if scope == 'all':
+            modified_since = min(int(self.last_updated_collections.timestamp()),
+                                 int(self.last_updated_creators.timestamp()))
+        elif scope == 'collections':
+            modified_since = int(self.last_updated_collections.timestamp())
+        else:  # 'creators'
+            modified_since = int(self.last_updated_creators.timestamp())
+
         resource_pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<record_id>\d+)$'
         agent_pattern = r'^/agents/(?P<agent_type>people|corporate_entities|families)/(?P<record_id>\d+)$'
-
 
         page = 1
         while True:
             deleted_records = self.client.get(
-                f'/delete-feed',
+                '/delete-feed',
                 params={
                     'page': page,
                     'modified_since': modified_since,
@@ -529,29 +530,29 @@ class ArcFlow:
             for record in deleted_records['results']:
                 resource_match = re.match(resource_pattern, record)
                 agent_match = re.match(agent_pattern, record)
-                if resource_match and not self.agents_only:
-                    resource_id = resource_match.group('resource_id')
-                    self.log.info(f'{" " * indent_size}Processing deleted resource ID {resource_id}...')
 
+                if resource_match and scope in ('collections', 'all'):
+                    resource_id = resource_match.group('record_id')
+                    self.log.info(f'Processing deleted resource ID {resource_id}...')
                     symlink_path = f'{resource_dir}/{resource_id}.xml'
                     ead_id = self.get_ead_from_symlink(symlink_path)
                     if ead_id:
                         self.delete_ead(
-                            resource_id, 
+                            resource_id,
                             ead_id.replace('.', '-'),  # dashes in Solr
-                            f'{xml_dir}/{ead_id}.xml', # dots in filenames
-                            f'{pdf_dir}/{ead_id}.pdf', 
+                            f'{resource_dir}/{ead_id}.xml',  # dots in filenames
+                            f'{pdf_dir}/{ead_id}.pdf',
                             indent_size=4)
                     else:
-                        self.log.error(f'{" " * (indent_size+2)}Symlink {symlink_path} not found. Unable to delete the associated EAD from Arclight Solr.')
+                        self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
 
-                if agent_match and not self.collections_only:
-                    agent_id = agent_match.group('agent_id')
-                    self.log.info(f'{" " * indent_size}Processing deleted agent ID {agent_id}...')
+                if agent_match and scope in ('creators', 'all'):
+                    agent_type = agent_match.group('agent_type')
+                    agent_id = agent_match.group('record_id')
+                    self.log.info(f'Processing deleted agent ID {agent_id}...')
                     file_path = f'{agent_dir}/{agent_id}.xml'
                     agent_solr_id = f'creator_{agent_type}_{agent_id}'
-                    self.delete_creator(file_path, agent_solr_id, indent_size)
-
+                    self.delete_creator(file_path, agent_solr_id)
 
             if deleted_records['last_page'] == page:
                 break
@@ -879,6 +880,7 @@ class ArcFlow:
             
             # Save EAC-CPF XML to file
             filename = f'{agents_dir}/{creator_id}.xml'
+            os.makedirs(agents_dir, exist_ok=True)
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(eac_cpf_xml)
             
@@ -901,14 +903,11 @@ class ArcFlow:
 
         xml_dir = f'{self.arclight_dir}/public/xml'
         agents_dir = f'{xml_dir}/agents'
-        modified_since = int(self.last_updated.timestamp())
+        modified_since = int(self.last_updated_creators.timestamp())
         indent_size = 0
         indent = ' ' * indent_size
 
         self.log.info(f'{indent}Processing creator agents...')
-
-        # Create agents directory if it doesn't exist
-        os.makedirs(agents_dir, exist_ok=True)
 
         # Get agents to process
         agents = self.get_all_agents(modified_since=modified_since, indent_size=indent_size)
@@ -1233,47 +1232,152 @@ class ArcFlow:
 
     def save_config_file(self):
         """
-        Save the last updated timestamp to the .arcflow.yml file.
+        Save the last updated timestamps to the .arcflow.yml file.
+        Each record type (collections, creators) has its own timestamp so they
+        can be run independently without overwriting each other's state.
         """
         try:
+            # Preserve timestamps for record types not processed in this run
+            try:
+                with open(self.arcflow_file_path, 'r') as file:
+                    config = yaml.safe_load(file) or {}
+            except FileNotFoundError:
+                config = {}
+            config.pop('last_updated', None)  # remove legacy single key if present
+            now = datetime.fromtimestamp(self.start_time, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S%z')
+            if not self.agents_only:
+                config['last_updated_collections'] = now
+            if not self.collections_only:
+                config['last_updated_creators'] = now
             with open(self.arcflow_file_path, 'w') as file:
-                yaml.dump({
-                    'last_updated': datetime.fromtimestamp(self.start_time, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S%z')
-                }, file)
+                yaml.dump(config, file)
                 self.log.info(f'Saved file .arcflow.yml.')
         except Exception as e:
             self.log.error(f'Error writing to file .arcflow.yml: {e}')
 
 
+    def run_collections(self):
+        """
+        Teardown (if force_update or first run), set up directories, and
+        process collection EADs.
+        """
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        resource_dir = f'{xml_dir}/resources'
+        pdf_dir = f'{self.arclight_dir}/public/pdf'
+
+        if self.force_update or int(self.last_updated_collections.timestamp()) <= 0:
+            # Delete only collection records from Solr so that creator records
+            # remain intact when collections are rebuilt independently.
+            # Standard query parser: '*:* AND NOT is_creator:true' matches all
+            # documents except those flagged as creators.
+            try:
+                response = requests.post(
+                    f'{self.solr_url}/update?commit=true',
+                    json={'delete': {'query': '*:* AND NOT is_creator:true'}},
+                )
+                if response.status_code == 200:
+                    self.log.info('Deleted all collection records from ArcLight Solr.')
+                    for dir_path, dir_name in [(resource_dir, 'XMLs'), (pdf_dir, 'PDFs')]:
+                        try:
+                            shutil.rmtree(dir_path)
+                            self.log.info(f'Deleted {dir_name} directory {dir_path}.')
+                        except Exception as e:
+                            self.log.error(f'Error deleting {dir_name} directory "{dir_path}": {e}')
+                else:
+                    self.log.error(f'Failed to delete collection records from ArcLight Solr. Status code: {response.status_code}')
+            except requests.exceptions.RequestException as e:
+                self.log.error(f'Error deleting collection records from ArcLight Solr: {e}')
+
+        os.makedirs(resource_dir, exist_ok=True)
+        os.makedirs(pdf_dir, exist_ok=True)
+        self.process_collections()
+
+
+    def run_creators(self):
+        """
+        Teardown (if force_update or first run), set up directories, and
+        process creator agents.
+        """
+        xml_dir = f'{self.arclight_dir}/public/xml'
+        agents_dir = f'{xml_dir}/agents'
+
+        if self.force_update or int(self.last_updated_creators.timestamp()) <= 0:
+            # Delete only creator records from Solr (collections are handled separately).
+            try:
+                response = requests.post(
+                    f'{self.solr_url}/update?commit=true',
+                    json={'delete': {'query': 'is_creator:true'}},
+                )
+                if response.status_code == 200:
+                    self.log.info('Deleted all creator records from ArcLight Solr.')
+                    try:
+                        shutil.rmtree(agents_dir)
+                        self.log.info(f'Deleted agents directory {agents_dir}.')
+                    except Exception as e:
+                        self.log.error(f'Error deleting agents directory "{agents_dir}": {e}')
+                else:
+                    self.log.error(f'Failed to delete creator records from ArcLight Solr. Status code: {response.status_code}')
+            except requests.exceptions.RequestException as e:
+                self.log.error(f'Error deleting creator records from ArcLight Solr: {e}')
+
+        os.makedirs(agents_dir, exist_ok=True)
+        self.process_creators()
+
+
+    def run_all(self):
+        """
+        Run all record-type workflows.
+        Updates repository metadata, then runs all record-type workflows in parallel.
+        This is the default execution path. When new record-type workflows
+        are introduced, add them here.
+        """
+        self.update_repositories()
+        workflows = [self.run_collections, self.run_creators]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
+            self.log.info('Running collections and creators in parallel...')
+            futures = [executor.submit(w) for w in workflows]
+            concurrent.futures.wait(futures)
+            exceptions = []
+            for future in futures:
+                exc = future.exception()
+                if exc is not None:
+                    self.log.error(f'Workflow failed: {exc}')
+                    exceptions.append(exc)
+            if exceptions:
+                # Raise the first exception to signal overall failure and prevent
+                # downstream deleted-record processing and config timestamp updates.
+                raise exceptions[0]
     def run(self):
         """
         Run the ArcFlow process.
         """
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
-        
-        # Update repositories (unless agents-only mode)
-        if not self.agents_only:
-            self.update_repositories()
-        
-        # Update collections/EADs (unless agents-only mode)
-        if not self.agents_only:
-            self.update_eads()
-        
-        # Update creator records (unless collections-only mode)
-        if not self.collections_only:
-            self.process_creators()
 
-        # processing deleted resources is not needed when
-        # force-update is set or modified_since is set to 0
-        if self.force_update or int(self.last_updated.timestamp()) <= 0:
+        if self.collections_only:
+            scope = 'collections'
+            self.run_collections()
+        elif self.agents_only:
+            scope = 'creators'
+            self.run_creators()
+        else:
+            scope = 'all'
+            self.run_all()
+
+        # Skip deleted record processing on force_update or if all active
+        # timestamps indicate a first run (nothing has been indexed yet).
+        active_timestamps = []
+        if scope in ('collections', 'all'):
+            active_timestamps.append(int(self.last_updated_collections.timestamp()))
+        if scope in ('creators', 'all'):
+            active_timestamps.append(int(self.last_updated_creators.timestamp()))
+        if self.force_update or all(t <= 0 for t in active_timestamps):
             self.log.info('Skipping deleted record processing.')
         else:
-            self.process_deleted_records()
+            self.process_deleted_records(scope)
 
         self.save_config_file()
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
 
-    
 
 
 def main():
@@ -1305,11 +1409,11 @@ def main():
     parser.add_argument(
         '--agents-only',
         action='store_true',
-        help='Process only agent records, skip collections (for testing)',)
+        help='Process only agent records, skip collections',)
     parser.add_argument(
         '--collections-only',
         action='store_true',
-        help='Process only repositories and collections, skip creator processing',)
+        help='Process only collections, skip creator processing',)
     parser.add_argument(
         '--arcuit-dir',
         default=None,
@@ -1317,7 +1421,7 @@ def main():
     parser.add_argument(
         '--skip-creator-indexing',
         action='store_true',
-        help='Generate creator XML files but skip Solr indexing (for testing)',)
+        help='Generate creator XML files but skip Solr indexing',)
     args = parser.parse_args()
     
     # Validate mutually exclusive flags
