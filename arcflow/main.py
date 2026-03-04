@@ -1409,11 +1409,11 @@ def main():
     parser.add_argument(
         '--agents-only',
         action='store_true',
-        help='Process only agent records, skip collections (for testing)',)
+        help='Process only agent records, skip collections',)
     parser.add_argument(
         '--collections-only',
         action='store_true',
-        help='Process only repositories and collections, skip creator processing',)
+        help='Process only collections, skip creator processing',)
     parser.add_argument(
         '--arcuit-dir',
         default=None,
@@ -1421,7 +1421,7 @@ def main():
     parser.add_argument(
         '--skip-creator-indexing',
         action='store_true',
-        help='Generate creator XML files but skip Solr indexing (for testing)',)
+        help='Generate creator XML files but skip Solr indexing',)
     args = parser.parse_args()
     
     # Validate mutually exclusive flags
