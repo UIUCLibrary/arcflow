@@ -34,7 +34,7 @@ logging.basicConfig(
 
 class ArcFlow:
     """
-    ArcFlow is a class that represents a flow of data from ArchivesSpace 
+    ArcFlow is a class that represents a flow of data from ArchivesSpace
     to ArcLight.
     """
 
@@ -43,7 +43,18 @@ class ArcFlow:
         self.solr_url = solr_url
         self.batch_size = 1000
         self.arclight_dir = arclight_dir
-        self.ead_extra_config = ead_extra_config if ead_extra_config.strip() else f'{self.arclight_dir}/lib/arcuit/traject/ead_extra_config.rb'
+        if ead_extra_config.strip():
+            if not os.path.isfile(ead_extra_config):
+                raise FileNotFoundError(f'Specified ead_extra_config not found: {ead_extra_config}')
+            self.ead_extra_config = ead_extra_config
+        else:
+            default_config = f'{self.arclight_dir}/lib/arcuit/traject/ead_extra_config.rb'
+            if os.path.isfile(default_config):
+                self.ead_extra_config = default_config
+                logging.info(f'Using default ead_extra_config: {default_config}')
+            else:
+                self.ead_extra_config = None
+                logging.warning(f'Default ead_extra_config not found at {default_config}. Proceeding without extra config.')
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
         self.force_update = force_update
@@ -129,7 +140,7 @@ class ArcFlow:
 
             update_repos = False
             for repo in repos:
-                # python doesn't support Zulu timezone suffixes, 
+                # python doesn't support Zulu timezone suffixes,
                 # converting system_mtime and user_mtime to UTC offset notation
                 if (self.last_updated <= datetime.strptime(
                         repo['system_mtime'].replace('Z','+0000'),
@@ -187,7 +198,7 @@ class ArcFlow:
 
                         yaml.safe_dump({
                             self.get_repo_id(repo): {
-                                k:repo[k] if k in repo else "" 
+                                k:repo[k] if k in repo else ""
                                 for k in (
                                     'name',
                                     'description',
