@@ -569,9 +569,10 @@ class ArcFlow:
                 '-s', 'solr_writer.commit_on_close=true',
                 '-i', 'xml',
                 '-c', traject_config,
-                '-c', self.traject_extra_config,
-                *xml_files
             ]
+            if self.traject_extra_config:
+                cmd.extend(['-c', self.traject_extra_config])
+            cmd.extend(xml_files)
 
             env = os.environ.copy()
             env['REPOSITORY_ID'] = str(repo_id)
