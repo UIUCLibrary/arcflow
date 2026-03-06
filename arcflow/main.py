@@ -36,12 +36,12 @@ logging.basicConfig(
 
 class ArcFlow:
     """
-    ArcFlow is a class that represents a flow of data from ArchivesSpace 
+    ArcFlow is a class that represents a flow of data from ArchivesSpace
     to ArcLight.
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, arcuit_dir=None, skip_creator_indexing=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, skip_creator_indexing=False):
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
         self.batch_size = 1000
@@ -53,7 +53,6 @@ class ArcFlow:
         self.force_update = force_update
         self.agents_only = agents_only
         self.collections_only = collections_only
-        self.arcuit_dir = arcuit_dir
         self.skip_creator_indexing = skip_creator_indexing
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
@@ -146,7 +145,7 @@ class ArcFlow:
             # is detected regardless of which pipeline last ran.
             last_updated = min(self.last_updated_collections, self.last_updated_creators)
             for repo in repos:
-                # python doesn't support Zulu timezone suffixes, 
+                # python doesn't support Zulu timezone suffixes,
                 # converting system_mtime and user_mtime to UTC offset notation
                 if (last_updated <= datetime.strptime(
                         repo['system_mtime'].replace('Z','+0000'),
@@ -204,7 +203,7 @@ class ArcFlow:
 
                         yaml.safe_dump({
                             self.get_repo_id(repo): {
-                                k:repo[k] if k in repo else "" 
+                                k:repo[k] if k in repo else ""
                                 for k in (
                                     'name',
                                     'description',
@@ -253,23 +252,23 @@ class ArcFlow:
             if xml.content:
                 xml_content = xml.content.decode('utf-8')
                 insert_pos = xml_content.find('<archdesc level="collection">')
-                
+
                 if insert_pos != -1:
                     # Find the position after the closing </did> tag
                     did_end_pos = xml_content.find('</did>', insert_pos)
-                    
+
                     if did_end_pos != -1:
                         # Move to after the </did> tag
                         did_end_pos += len('</did>')
                         extra_xml = ''
-                        
+
                         # Add record group and subgroup labels
                         rg_label, sg_label = extract_labels(resource)[1:3]
                         if rg_label:
                             extra_xml += f'\n<recordgroup>{xml_escape(rg_label)}</recordgroup>'
                             if sg_label:
                                 extra_xml += f'\n<subgroup>{xml_escape(sg_label)}</subgroup>'
-                        
+
                         # Handle biographical/historical notes from creator agents
                         bioghist_content = self.get_creator_bioghist(resource, indent_size=indent_size)
                         if bioghist_content:
@@ -277,26 +276,26 @@ class ArcFlow:
                             # Search for existing bioghist after </did> but before </archdesc>
                             archdesc_end = xml_content.find('</archdesc>', did_end_pos)
                             search_section = xml_content[did_end_pos:archdesc_end] if archdesc_end != -1 else xml_content[did_end_pos:]
-                            
+
                             # Look for closing </bioghist> tag
                             existing_bioghist_end = search_section.rfind('</bioghist>')
-                            
+
                             if existing_bioghist_end != -1:
                                 # Found existing bioghist - insert agent elements INSIDE it (before closing tag)
                                 insert_pos = did_end_pos + existing_bioghist_end
-                                xml_content = (xml_content[:insert_pos] + 
-                                    f'\n{bioghist_content}\n' + 
+                                xml_content = (xml_content[:insert_pos] +
+                                    f'\n{bioghist_content}\n' +
                                     xml_content[insert_pos:])
                             else:
                                 # No existing bioghist - wrap agent elements in parent container
                                 wrapped_content = f'<bioghist>\n{bioghist_content}\n</bioghist>'
                                 extra_xml += f'\n{wrapped_content}'
-                        
+
                         if extra_xml:
-                            xml_content = (xml_content[:did_end_pos] + 
-                                extra_xml + 
+                            xml_content = (xml_content[:did_end_pos] +
+                                extra_xml +
                                 xml_content[did_end_pos:])
-                
+
                 xml_content = xml_content.encode('utf-8')
             else:
                 xml_content = xml.content
@@ -310,13 +309,13 @@ class ArcFlow:
             # delete the previous EAD in ArcLight Solr
             prev_ead_id = self.get_ead_from_symlink(
                 f'{xml_dir}/{resource_id}.xml')
-            if (prev_ead_id is not None 
+            if (prev_ead_id is not None
                     and prev_ead_id != resource['ead_id']):
                 self.delete_ead(
-                    resource_id, 
+                    resource_id,
                     prev_ead_id.replace('.', '-'),  # dashes in Solr
                     f'{xml_dir}/{prev_ead_id}.xml', # dots in filenames
-                    f'{pdf_dir}/{prev_ead_id}.pdf', 
+                    f'{pdf_dir}/{prev_ead_id}.pdf',
                     indent_size=indent_size)
 
             os.makedirs(xml_dir, exist_ok=True)
@@ -328,17 +327,17 @@ class ArcFlow:
 
             repo_id = self.get_repo_id(repo)
             self.resources_counter[repo_id] += 1
-            # files pending to index are named repoID_resourceID_batch_batchNUM.xml 
+            # files pending to index are named repoID_resourceID_batch_batchNUM.xml
             self.create_symlink(
                 os.path.basename(xml_file_path),
                 f'{os.path.dirname(xml_file_path)}/{repo_id}_{resource_id}_batch_{math.ceil(self.resources_counter[repo_id]/self.batch_size)}.xml',
                 indent_size=indent_size)
         else:
             self.delete_ead(
-                resource_id, 
-                ead_id, 
-                xml_file_path, 
-                f'{pdf_dir}/{resource["ead_id"]}.pdf', 
+                resource_id,
+                ead_id,
+                xml_file_path,
+                f'{pdf_dir}/{resource["ead_id"]}.pdf',
                 indent_size=indent_size)
 
         # return the PDF job info for next async processing step
@@ -397,9 +396,9 @@ class ArcFlow:
 
                 os.makedirs(pdf_dir, exist_ok=True)
                 self.save_file(
-                    f'{pdf_dir}/{ead_id}.pdf', 
-                    pdf_content, 
-                    'PDF', 
+                    f'{pdf_dir}/{ead_id}.pdf',
+                    pdf_content,
+                    'PDF',
                     indent_size=indent_size)
 
                 self.log.info(f'Finished processing "{ead_id}".')
@@ -411,7 +410,7 @@ class ArcFlow:
 
     def process_collections(self):
         """
-        Update EADs in ArcLight with the latest data from resources in 
+        Update EADs in ArcLight with the latest data from resources in
         ArchivesSpace.
         """
         xml_dir = f'{self.arclight_dir}/public/xml'
@@ -432,7 +431,7 @@ class ArcFlow:
         with Pool(processes=10) as pool:
             # Tasks for processing repositories
             results_1 = [pool.apply_async(
-                self.task_repository, 
+                self.task_repository,
                 args=(repo, resource_dir, modified_since, indent_size))
                 for repo in repos]
             # Collect outputs from repository tasks
@@ -440,7 +439,7 @@ class ArcFlow:
 
             # Tasks for processing resources
             results_2 = [pool.apply_async(
-                self.task_resource, 
+                self.task_resource,
                 args=(repo, resource_id, resource_dir, pdf_dir, indent_size))
                 for repo, resources in outputs_1 for resource_id in resources]
             # Collect outputs from resource tasks
@@ -572,11 +571,11 @@ class ArcFlow:
                 cwd=self.arclight_dir
             )
             arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
-            
+
             if not arclight_path:
                 self.log.error(f'{indent}Could not find arclight gem path')
                 return
-            
+
             traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
             xml_files = glob.glob(xml_file_path)  # Returns list of matching files
             cmd = [
@@ -589,7 +588,7 @@ class ArcFlow:
                 '-i', 'xml',
                 '-c', traject_config,
             ] + xml_files
-            
+
             if self.traject_extra_config:
                 if isinstance(self.traject_extra_config, (list, tuple)):
                     cmd.extend(self.traject_extra_config)
@@ -624,10 +623,10 @@ class ArcFlow:
         """
         indent = ' ' * indent_size
         bioghist_elements = []
-        
+
         if 'linked_agents' not in resource:
             return None
-        
+
         # Process linked_agents in order to maintain consistency with origination order
         for linked_agent in resource['linked_agents']:
             # Only process agents with 'creator' role
@@ -636,10 +635,10 @@ class ArcFlow:
                 if agent_ref:
                     try:
                         agent = self.client.get(agent_ref).json()
-                        
+
                         # Get agent name for head element
                         agent_name = agent.get('title') or agent.get('display_name', {}).get('sort_name', 'Unknown')
-                        
+
                         # Check for notes in the agent record
                         if 'notes' in agent:
                             for note in agent['notes']:
@@ -651,7 +650,7 @@ class ArcFlow:
                                         self.log.error(f'{indent}**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist for agent {agent_ref}')
                                         # Skip creating id attribute if persistent_id is missing
                                         persistent_id = None
-                                    
+
                                     # Extract note content from subnotes
                                     paragraphs = []
                                     if 'subnotes' in note:
@@ -673,7 +672,7 @@ class ArcFlow:
                                                 # Wrap each line in <p> tags
                                                 for line in lines:
                                                     paragraphs.append(f'<p>{line}</p>')
-                                    
+
                                     # Create nested bioghist element if we have paragraphs
                                     if paragraphs:
                                         paragraphs_xml = '\n'.join(paragraphs)
@@ -686,7 +685,7 @@ class ArcFlow:
                                         bioghist_elements.append(bioghist_el)
                     except Exception as e:
                         self.log.error(f'{indent}Error fetching biographical information for agent {agent_ref}: {e}')
-        
+
         if bioghist_elements:
             # Return the agent bioghist elements (unwrapped)
             # The caller will decide whether to wrap them based on whether
@@ -829,18 +828,18 @@ class ArcFlow:
         """
         Process a single agent and generate a creator document in EAC-CPF XML format.
         Retrieves EAC-CPF directly from ArchivesSpace archival_contexts endpoint.
-        
+
         Args:
             agent_uri: Agent URI from ArchivesSpace (e.g., '/agents/corporate_entities/123')
             agents_dir: Directory to save agent XML files
             repo_id: Repository ID to use for archival_contexts endpoint (default: 1)
             indent_size: Indentation size for logging
-            
+
         Returns:
             str: Creator document ID if successful, None otherwise
         """
         indent = ' ' * indent_size
-        
+
         try:
             # Parse agent URI to extract type and ID
             # URI format: /agents/{agent_type}/{id}
@@ -848,25 +847,25 @@ class ArcFlow:
             if len(parts) != 3 or parts[0] != 'agents':
                 self.log.error(f'{indent}Invalid agent URI format: {agent_uri}')
                 return None
-            
+
             agent_type = parts[1]  # e.g., 'corporate_entities', 'people', 'families'
             agent_id = parts[2]
-            
+
             # Construct EAC-CPF endpoint
             # Format: /repositories/{repo_id}/archival_contexts/{agent_type}/{id}.xml
             eac_cpf_endpoint = f'/repositories/{repo_id}/archival_contexts/{agent_type}/{agent_id}.xml'
-            
+
             self.log.debug(f'{indent}Fetching EAC-CPF from: {eac_cpf_endpoint}')
-            
+
             # Fetch EAC-CPF XML
             response = self.client.get(eac_cpf_endpoint)
-            
+
             if response.status_code != 200:
                 self.log.error(f'{indent}Failed to fetch EAC-CPF for {agent_uri}: HTTP {response.status_code}')
                 return None
-            
+
             eac_cpf_xml = response.text
-            
+
             # Parse the EAC-CPF XML to validate and inspect its structure
             try:
                 root = ET.fromstring(eac_cpf_xml)
@@ -874,19 +873,19 @@ class ArcFlow:
             except ET.ParseError as e:
                 self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
                 return None
-            
+
             # Generate creator ID
             creator_id = f'creator_{agent_type}_{agent_id}'
-            
+
             # Save EAC-CPF XML to file
             filename = f'{agents_dir}/{creator_id}.xml'
             os.makedirs(agents_dir, exist_ok=True)
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(eac_cpf_xml)
-            
+
             self.log.info(f'{indent}Created creator document: {creator_id}')
             return creator_id
-            
+
         except Exception as e:
             self.log.error(f'{indent}Error processing agent {agent_uri}: {e}')
             import traceback
@@ -934,7 +933,7 @@ class ArcFlow:
         # Index creators to Solr (if not skipped)
         if not self.skip_creator_indexing and creator_ids:
             self.log.info(f'{indent}Indexing {len(creator_ids)} creator records to Solr...')
-            traject_config = self.find_traject_config()
+            traject_config = self.find_eac_cpf_config()
             if traject_config:
                 self.log.info(f'{indent}Using traject config: {traject_config}')
                 indexed = self.index_creators(agents_dir, creator_ids)
@@ -952,124 +951,81 @@ class ArcFlow:
         return creator_ids
 
 
-    def find_traject_config(self):
+    def find_eac_cpf_config(self):
         """
         Find the traject config for creator indexing.
-        
-        Search order (follows collection records pattern):
-        1. arcuit_dir if provided (most up-to-date user control)
-        2. arcuit gem via bundle show (for backward compatibility)
-        3. example_traject_config_eac_cpf.rb in arcflow (fallback when used as module without arcuit)
-        
+
+        Search order:
+        1. {arclight_dir}/lib/arcuit/traject/eac_cpf_config.rb
+        2. example_eac_cpf_config.rb in arcflow root
+        3. Fail
+
         Returns:
-            str: Path to traject config, or None if not found
+           str: Path to traject config, or None if not found
         """
-        self.log.info('Searching for traject_config_eac_cpf.rb...')
-        searched_paths = []
+        self.log.info('Searching for eac_cpf_config.rb...')
 
-        # Try 1: arcuit_dir if provided (highest priority - user's explicit choice)
-        if self.arcuit_dir:
-            self.log.debug(f'  Checking arcuit_dir parameter: {self.arcuit_dir}')
-            candidate_paths = [
-                os.path.join(self.arcuit_dir, 'traject_config_eac_cpf.rb'),
-                os.path.join(self.arcuit_dir, 'lib', 'arcuit', 'traject', 'traject_config_eac_cpf.rb'),
-            ]
-            searched_paths.extend(candidate_paths)
-            for traject_config in candidate_paths:
-                if os.path.exists(traject_config):
-                    self.log.info(f'✓ Using traject config from arcuit_dir: {traject_config}')
-                    return traject_config
-            self.log.debug('  traject_config_eac_cpf.rb not found in arcuit_dir')
+        # Try 1: Check arclight directory
+        traject_config = os.path.join(self.arclight_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb')
+        if os.path.exists(traject_config):
+           self.log.info(f'✓ Using traject config from arclight: {traject_config}')
+           return traject_config
 
-        # Try 2: bundle show arcuit (for backward compatibility when arcuit_dir not provided)
-        try:
-            result = subprocess.run(
-                ['bundle', 'show', 'arcuit'],
-                cwd=self.arclight_dir,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                arcuit_path = result.stdout.strip()
-                self.log.debug(f'  Found arcuit gem at: {arcuit_path}')
-                candidate_paths = [
-                    os.path.join(arcuit_path, 'traject_config_eac_cpf.rb'),
-                    os.path.join(arcuit_path, 'lib', 'arcuit', 'traject', 'traject_config_eac_cpf.rb'),
-                ]
-                searched_paths.extend(candidate_paths)
-                for traject_config in candidate_paths:
-                    if os.path.exists(traject_config):
-                        self.log.info(f'✓ Using traject config from arcuit gem: {traject_config}')
-                        return traject_config
-                self.log.debug(
-                    '  traject_config_eac_cpf.rb not found in arcuit gem '
-                    '(checked root and lib/arcuit/traject/ subdirectory)'
-                )
-            else:
-                self.log.debug('  arcuit gem not found via bundle show')
-        except Exception as e:
-            self.log.debug(f'  Error checking for arcuit gem: {e}')
-
-        # Try 3: example file in arcflow package (fallback for module usage without arcuit)
-        # We know exactly where this file is located - at the repo root
+        # Try 2: Check example file in arcflow root
         arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
         arcflow_repo_root = os.path.dirname(arcflow_package_dir)
-        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
-        searched_paths.append(traject_config)
+        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf_config.rb')
 
         if os.path.exists(traject_config):
-            self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
-            self.log.info(
-                '  Note: Using example config. For production, copy this file to your '
-                'arcuit gem or specify location with --arcuit-dir.'
-            )
-            return traject_config
+           self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
+           self.log.info(
+               '  Note: Using example config. For production, copy this file to '
+               f'{self.arclight_dir}/lib/arcuit/traject/eac_cpf_config.rb'
+           )
+           return traject_config
 
-        # No config found anywhere - show all paths searched
-        self.log.error('✗ Could not find traject_config_eac_cpf.rb in any of these locations:')
-        for i, path in enumerate(searched_paths, 1):
-            self.log.error(f'  {i}. {path}')
-        self.log.error('')
-        self.log.error('  Add traject_config_eac_cpf.rb to your arcuit gem or specify with --arcuit-dir.')
+        # No config found - fail
+        self.log.error('✗ Could not find eac_cpf_config.rb')
+        self.log.error(f'  Checked: {os.path.join(self.arclight_dir, "lib", "arcuit", "traject", "eac_cpf_config.rb")}')
+        self.log.error(f'  Checked: {os.path.join(arcflow_repo_root, "example_eac_cpf_config.rb")}')
         return None
 
 
     def index_creators(self, agents_dir, creator_ids, batch_size=100):
         """
         Index creator XML files to Solr using traject.
-        
+
         Args:
             agents_dir: Directory containing creator XML files
             creator_ids: List of creator IDs to index
             batch_size: Number of files to index per traject call (default: 100)
-        
+
         Returns:
             int: Number of successfully indexed creators
         """
-        traject_config = self.find_traject_config()
+        traject_config = self.find_eac_cpf_config()
         if not traject_config:
             return 0
-        
+
         indexed_count = 0
         failed_count = 0
-        
+
         # Process in batches to avoid command line length limits
         total_batches = math.ceil(len(creator_ids) / batch_size)
         for i in range(0, len(creator_ids), batch_size):
             batch = creator_ids[i:i+batch_size]
             batch_num = (i // batch_size) + 1
-            
+
             # Build list of XML files for this batch
             xml_files = [f'{agents_dir}/{cid}.xml' for cid in batch]
-            
+
             # Filter to only existing files
             existing_files = [f for f in xml_files if os.path.exists(f)]
-            
+
             if not existing_files:
                 self.log.warning(f'  Batch {batch_num}/{total_batches}: No files found, skipping')
                 continue
-            
+
             try:
                 cmd = [
                     'bundle', 'exec', 'traject',
@@ -1077,16 +1033,16 @@ class ArcFlow:
                     '-i', 'xml',
                     '-c', traject_config
                 ] + existing_files
-                
+
                 self.log.info(f'  Indexing batch {batch_num}/{total_batches}: {len(existing_files)} files')
-                
+
                 result = subprocess.run(
                     cmd,
                     cwd=self.arclight_dir,
                     stderr=subprocess.PIPE,
                     timeout=300  # 5 minute timeout per batch
                 )
-                
+
                 if result.returncode == 0:
                     indexed_count += len(existing_files)
                     self.log.info(f'  Successfully indexed {len(existing_files)} creators')
@@ -1095,7 +1051,7 @@ class ArcFlow:
                     self.log.error(f'  Traject failed with exit code {result.returncode}')
                     if result.stderr:
                         self.log.error(f'  STDERR: {result.stderr.decode("utf-8")}')
-                    
+
             except subprocess.TimeoutExpired:
                 self.log.error(f'  Traject timed out for batch {batch_num}/{total_batches}')
                 failed_count += len(existing_files)
@@ -1105,7 +1061,7 @@ class ArcFlow:
 
         if failed_count > 0:
             self.log.warning(f'Creator indexing completed with errors: {indexed_count} succeeded, {failed_count} failed')
-        
+
         return indexed_count
 
 
@@ -1415,15 +1371,11 @@ def main():
         action='store_true',
         help='Process only collections, skip creator processing',)
     parser.add_argument(
-        '--arcuit-dir',
-        default=None,
-        help='Path to arcuit repository (for traject config). If not provided, will try bundle show arcuit.',)
-    parser.add_argument(
         '--skip-creator-indexing',
         action='store_true',
         help='Generate creator XML files but skip Solr indexing',)
     args = parser.parse_args()
-    
+
     # Validate mutually exclusive flags
     if args.agents_only and args.collections_only:
         parser.error('Cannot use both --agents-only and --collections-only')
@@ -1437,7 +1389,6 @@ def main():
         force_update=args.force_update,
         agents_only=args.agents_only,
         collections_only=args.collections_only,
-        arcuit_dir=args.arcuit_dir,
         skip_creator_indexing=args.skip_creator_indexing)
     arcflow.run()
 
