@@ -39,11 +39,11 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, traject_extra_config='', force_update=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, ead_extra_config='', force_update=False):
         self.solr_url = solr_url
         self.batch_size = 1000
-        self.traject_extra_config = traject_extra_config if traject_extra_config.strip() else ''
         self.arclight_dir = arclight_dir
+        self.ead_extra_config = ead_extra_config if ead_extra_config.strip() else f'{self.arclight_dir}/lib/arcuit/traject/ead_extra_config.rb'
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
         self.force_update = force_update
@@ -570,8 +570,8 @@ class ArcFlow:
                 '-i', 'xml',
                 '-c', traject_config,
             ]
-            if self.traject_extra_config:
-                cmd.extend(['-c', self.traject_extra_config])
+            if self.ead_extra_config:
+                cmd.extend(['-c', self.ead_extra_config])
             cmd.extend(xml_files)
 
             env = os.environ.copy()
@@ -826,16 +826,16 @@ def main():
         required=True,
         help='URL of the Solr core',)
     parser.add_argument(
-            '--traject-extra-config',
+            '--ead-extra-config',
             default='',
-            help='Path to extra Traject configuration file',)
+            help='Path to extra Traject EAD configuration file',)
     args = parser.parse_args()
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
-        traject_extra_config=args.traject_extra_config,
+        ead_extra_config=args.ead_extra_config,
         force_update=args.force_update)
     arcflow.run()
 
