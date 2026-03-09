@@ -11,6 +11,7 @@ import logging
 import math
 import sys
 import concurrent.futures
+import glob
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
 from xml.etree import ElementTree as ET
@@ -41,13 +42,23 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, traject_extra_config='', force_update=False, agents_only=False, collections_only=False, skip_creator_indexing=False):
+    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, ead_extra_config='', force_update=False, agents_only=False, collections_only=False, skip_creator_indexing=False):
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
         self.batch_size = 1000
-        clean_extra_config = traject_extra_config.strip()
-        self.traject_extra_config = clean_extra_config or None
         self.arclight_dir = arclight_dir
+        if ead_extra_config.strip():
+            if not os.path.isfile(ead_extra_config):
+                raise FileNotFoundError(f'Specified ead_extra_config not found: {ead_extra_config}')
+            self.ead_extra_config = ead_extra_config
+        else:
+            default_config = f'{self.arclight_dir}/lib/arcuit/traject/ead_extra_config.rb'
+            if os.path.isfile(default_config):
+                self.ead_extra_config = default_config
+                logging.info(f'Using default ead_extra_config: {default_config}')
+            else:
+                self.ead_extra_config = None
+                logging.warning(f'Default ead_extra_config not found at {default_config}. Proceeding without extra config.')
         self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
         self.force_update = force_update
@@ -463,19 +474,18 @@ class ArcFlow:
                 r.get()
 
             # Remove pending symlinks after indexing
-            for repo_id, batch_num in batches:
-                xml_file_path = f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml'
-                try:
-                    result = subprocess.run(
-                        f'rm {xml_file_path}',
-                        shell=True,
-                        cwd=self.arclight_dir,
-                        stderr=subprocess.PIPE,)
-                    self.log.error(f'{" " * indent_size}{result.stderr.decode("utf-8")}')
-                    if result.returncode != 0:
-                        self.log.error(f'{" " * indent_size}Failed to remove pending symlinks {xml_file_path}. Return code: {result.returncode}')
-                except Exception as e:
-                    self.log.error(f'{" " * indent_size}Error removing pending symlinks {xml_file_path}: {e}')
+                for repo_id, batch_num in batches:
+                    xml_file_pattern = f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml'
+                    xml_files = glob.glob(xml_file_pattern)
+
+                    for xml_file_path in xml_files:
+                        try:
+                            os.remove(xml_file_path)
+                            self.log.info(f'{" " * indent_size}Removed pending symlink {xml_file_path}')
+                        except FileNotFoundError:
+                            self.log.warning(f'{" " * indent_size}File not found: {xml_file_path}')
+                        except Exception as e:
+                            self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
 
             # Tasks for processing PDFs
             results_4 = [pool.apply_async(
@@ -577,7 +587,13 @@ class ArcFlow:
                 return
 
             traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
-            xml_files = glob.glob(xml_file_path)  # Returns list of matching files
+            xml_files = glob.glob(xml_file_path)
+
+            if not xml_files:
+                self.log.warning(f'{indent}No files found matching pattern: {xml_file_path}')
+                return
+
+
             cmd = [
                 'bundle', 'exec', 'traject',
                 '-u', self.solr_url,
@@ -587,17 +603,14 @@ class ArcFlow:
                 '-s', 'solr_writer.commit_on_close=true',
                 '-i', 'xml',
                 '-c', traject_config,
-            ] + xml_files
-
-            if self.traject_extra_config:
-                if isinstance(self.traject_extra_config, (list, tuple)):
-                    cmd.extend(self.traject_extra_config)
-                else:
-                    # Treat a string extra config as a path and pass it with -c
-                    cmd.extend(['-c', self.traject_extra_config])
+            ]
+            if self.ead_extra_config:
+                cmd.extend(['-c', self.ead_extra_config])
+            cmd.extend(xml_files)
 
             env = os.environ.copy()
             env['REPOSITORY_ID'] = str(repo_id)
+
             result = subprocess.run(
                 cmd,
                 cwd=self.arclight_dir,
@@ -1359,9 +1372,9 @@ def main():
         required=True,
         help='URL of the ASpace Solr core',)
     parser.add_argument(
-        '--traject-extra-config',
-        default='',
-        help='Path to extra Traject configuration file',)
+            '--ead-extra-config',
+            default='',
+            help='Path to extra Traject EAD configuration file',)
     parser.add_argument(
         '--agents-only',
         action='store_true',
@@ -1384,8 +1397,9 @@ def main():
         arclight_dir=args.arclight_dir,
         aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
+        ead_extra_config=args.ead_extra_config,
+        force_update=args.force_update)
         aspace_solr_url=args.aspace_solr_url,
-        traject_extra_config=args.traject_extra_config,
         force_update=args.force_update,
         agents_only=args.agents_only,
         collections_only=args.collections_only,
