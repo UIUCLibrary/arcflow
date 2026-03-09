@@ -224,6 +224,24 @@ to_field 'relationship_types_ssim' do |record, accumulator|
   end
 end
 
+# Collections this creator is responsible for - EAD IDs injected by arcflow
+# into <resourceRelation resourceRelationType="creatorOf"> elements as:
+#   <descriptiveNote><p>ead_id:{ead_id}</p></descriptiveNote>
+# Indexed as an array of EAD IDs (e.g., ["ALA.9.5.16"]) for bidirectional
+# creator↔collection linking in Solr.
+to_field 'collection_arclight_ids_ssim' do |record, accumulator|
+  relations = record.xpath(
+    '//eac:cpfDescription/eac:relations/eac:resourceRelation[@resourceRelationType="creatorOf"]',
+    EAC_NS
+  )
+  relations.each do |rel|
+    note = rel.xpath('eac:descriptiveNote/eac:p', EAC_NS).first
+    if note && note.text =~ /\Aead_id:(.+)\z/
+      accumulator << $1.strip
+    end
+  end
+end
+
 # Agent source URI (from original ArchivesSpace)
 to_field 'agent_uri_ssi' do |record, accumulator|
   # Try to extract from control section or otherRecordId

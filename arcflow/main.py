@@ -262,6 +262,11 @@ class ArcFlow:
             # (record group/subgroup labels and biographical/historical notes)
             if xml.content:
                 xml_content = xml.content.decode('utf-8')
+
+                # Add authfilenumber attributes to origination name elements
+                # (links creator names in EAD to their Solr creator records)
+                xml_content = self.add_creator_ids_to_origination(xml_content, resource, indent_size=indent_size)
+
                 insert_pos = xml_content.find('<archdesc level="collection">')
 
                 if insert_pos != -1:
@@ -706,6 +711,164 @@ class ArcFlow:
             return '\n'.join(bioghist_elements)
         return None
 
+    def add_creator_ids_to_origination(self, xml_content, resource, indent_size=0):
+        """
+        Add authfilenumber attributes to name elements inside <origination> elements in EAD XML.
+
+        Maps linked_agents with role='creator' to origination elements by index order.
+        The authfilenumber value is a creator ID in the format creator_{type}_{id},
+        which is a valid EAD attribute for authority file identifiers.
+
+        Args:
+            xml_content: EAD XML as a string
+            resource: ArchivesSpace resource record with resolved linked_agents
+            indent_size: Indentation size for logging
+
+        Returns:
+            str: Modified EAD XML string
+        """
+        indent = ' ' * indent_size
+
+        # Extract creator IDs from linked_agents in order
+        creator_ids = []
+        for linked_agent in resource.get('linked_agents', []):
+            if linked_agent.get('role') == 'creator':
+                agent_ref = linked_agent.get('ref', '')
+                match = re.match(r'.*/agents/(corporate_entities|people|families)/(\d+)$', agent_ref)
+                if match:
+                    creator_ids.append(f'creator_{match.group(1)}_{match.group(2)}')
+                else:
+                    self.log.warning(f'{indent}Could not parse creator ID from agent ref: {agent_ref}')
+
+        if not creator_ids:
+            return xml_content
+
+        # Match origination elements; name elements within get authfilenumber in order
+        origination_pattern = re.compile(r'<origination[^>]*>.*?</origination>', re.DOTALL)
+        name_start_pattern = re.compile(r'<(corpname|persname|famname)((?:\s[^>]*)?)(>|/>)')
+
+        result = []
+        prev_end = 0
+        creator_idx = 0
+
+        for orig_match in origination_pattern.finditer(xml_content):
+            result.append(xml_content[prev_end:orig_match.start()])
+            orig_text = orig_match.group()
+
+            if creator_idx < len(creator_ids):
+                creator_id = creator_ids[creator_idx]
+                name_match = name_start_pattern.search(orig_text)
+                if name_match and 'authfilenumber' not in name_match.group(2):
+                    new_tag = (f'<{name_match.group(1)}{name_match.group(2)}'
+                               f' authfilenumber="{creator_id}"{name_match.group(3)}')
+                    orig_text = orig_text[:name_match.start()] + new_tag + orig_text[name_match.end():]
+                creator_idx += 1
+
+            result.append(orig_text)
+            prev_end = orig_match.end()
+
+        result.append(xml_content[prev_end:])
+        return ''.join(result)
+
+    def add_collection_links_to_eac_cpf(self, eac_cpf_xml, indent_size=0):
+        """
+        Add <descriptiveNote><p>ead_id:{ead_id}</p></descriptiveNote> to
+        <resourceRelation resourceRelationType="creatorOf"> elements in EAC-CPF XML.
+
+        For each creatorOf resourceRelation, fetches the linked ArchivesSpace resource
+        to obtain its ead_id. If a resource cannot be fetched (deleted, unpublished, etc.),
+        logs a warning and skips that collection link.
+
+        Args:
+            eac_cpf_xml: EAC-CPF XML as a string
+            indent_size: Indentation size for logging
+
+        Returns:
+            str: Modified EAC-CPF XML string
+        """
+        indent = ' ' * indent_size
+
+        # Match creatorOf resourceRelation elements (handles any attribute ordering)
+        resource_relation_pattern = re.compile(
+            r'(<resourceRelation\b[^>]*?\bresourceRelationType=["\']creatorOf["\'][^>]*?>)'
+            r'(.*?)'
+            r'(</resourceRelation>)',
+            re.DOTALL
+        )
+
+        result = []
+        prev_end = 0
+
+        for match in resource_relation_pattern.finditer(eac_cpf_xml):
+            result.append(eac_cpf_xml[prev_end:match.start()])
+
+            opening_tag = match.group(1)
+            content = match.group(2)
+            closing_tag = match.group(3)
+
+            # Idempotent: skip if descriptiveNote already added
+            if '<descriptiveNote>' in content:
+                result.append(match.group(0))
+                prev_end = match.end()
+                continue
+
+            # Extract xlink:href from opening tag
+            href_match = re.search(r'xlink:href=["\']([^"\']+)["\']', opening_tag)
+            if not href_match:
+                result.append(match.group(0))
+                prev_end = match.end()
+                continue
+
+            href = href_match.group(1)
+
+            # Extract repo_id and resource_id from ASpace URL
+            uri_match = re.search(r'/repositories/(\d+)/resources/(\d+)', href)
+            if not uri_match:
+                self.log.warning(f'{indent}Could not parse resource URI from resourceRelation href: {href}')
+                result.append(match.group(0))
+                prev_end = match.end()
+                continue
+
+            res_repo_id = uri_match.group(1)
+            res_resource_id = uri_match.group(2)
+
+            # Fetch resource to get ead_id; skip on any error
+            try:
+                response = self.client.get(f'/repositories/{res_repo_id}/resources/{res_resource_id}')
+                if response.status_code != 200:
+                    self.log.warning(
+                        f'{indent}Could not fetch resource {href}: HTTP {response.status_code}. '
+                        'Skipping collection link.')
+                    result.append(match.group(0))
+                    prev_end = match.end()
+                    continue
+
+                resource = response.json()
+                ead_id = resource.get('ead_id')
+                if not ead_id:
+                    self.log.warning(
+                        f'{indent}Resource /repositories/{res_repo_id}/resources/{res_resource_id} '
+                        'has no ead_id. Skipping collection link.')
+                    result.append(match.group(0))
+                    prev_end = match.end()
+                    continue
+
+                descriptive_note = (
+                    f'\n    <descriptiveNote>\n'
+                    f'      <p>ead_id:{ead_id}</p>\n'
+                    f'    </descriptiveNote>'
+                )
+                result.append(opening_tag + content + descriptive_note + '\n  ' + closing_tag)
+
+            except Exception as e:
+                self.log.warning(f'{indent}Could not fetch resource for {href}: {e}. Skipping collection link.')
+                result.append(match.group(0))
+
+            prev_end = match.end()
+
+        result.append(eac_cpf_xml[prev_end:])
+        return ''.join(result)
+
     def _get_target_agent_criteria(self, modified_since=0):
         """
         Defines the Solr query criteria for "target" agents.
@@ -886,6 +1049,9 @@ class ArcFlow:
             except ET.ParseError as e:
                 self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
                 return None
+
+            # Add collection ead_ids to resourceRelation creatorOf elements
+            eac_cpf_xml = self.add_collection_links_to_eac_cpf(eac_cpf_xml, indent_size=indent_size)
 
             # Generate creator ID
             creator_id = f'creator_{agent_type}_{agent_id}'
