@@ -61,8 +61,11 @@ class XmlTransformService:
         if not creator_ids:
             return xml_content
 
-        # Match origination elements; name elements within get authfilenumber in order
-        origination_pattern = re.compile(r'<origination[^>]*>.*?</origination>', re.DOTALL)
+        # Match creator origination elements (label="Creator"); name elements within get authfilenumber in order
+        origination_pattern = re.compile(
+            r'<origination(?=[^>]*\blabel=(?:"Creator"|\'Creator\'))[^>]*>.*?</origination>',
+            re.DOTALL,
+        )
         name_start_pattern = re.compile(r'<(corpname|persname|famname)((?:\s[^>]*)?)(>|/>)')
 
         result = []
@@ -76,11 +79,24 @@ class XmlTransformService:
             if creator_idx < len(creator_ids):
                 creator_id = creator_ids[creator_idx]
                 name_match = name_start_pattern.search(orig_text)
-                if name_match and 'authfilenumber' not in name_match.group(2):
-                    new_tag = (f'<{name_match.group(1)}{name_match.group(2)}'
-                               f' authfilenumber="{creator_id}"{name_match.group(3)}')
-                    orig_text = orig_text[:name_match.start()] + new_tag + orig_text[name_match.end():]
-                creator_idx += 1
+                if name_match:
+                    if 'authfilenumber' not in name_match.group(2):
+                        new_tag = (f'<{name_match.group(1)}{name_match.group(2)}'
+                                   f' authfilenumber="{creator_id}"{name_match.group(3)}')
+                        orig_text = (
+                            orig_text[:name_match.start()] + new_tag + orig_text[name_match.end():]
+                        )
+                        creator_idx += 1
+                    else:
+                        # Name element already has an authfilenumber; keep creator index for next origination
+                        self.log.debug(
+                            f'{indent}Skipping creator ID {creator_id}: name element already has authfilenumber'
+                        )
+                else:
+                    # No eligible name element found; keep creator index for next origination
+                    self.log.debug(
+                        f'{indent}No eligible name element in <origination> for creator ID {creator_id}'
+                    )
 
             result.append(orig_text)
             prev_end = orig_match.end()
