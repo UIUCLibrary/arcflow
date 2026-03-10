@@ -821,10 +821,10 @@ class ArcFlow:
 
             href = href_match.group(1)
 
-            # Extract repo_id and resource_id from ASpace URL
+            # Only process resource URLs (skip digital_objects, etc.)
             uri_match = re.search(r'/repositories/(\d+)/resources/(\d+)', href)
             if not uri_match:
-                self.log.warning(f'{indent}Could not parse resource URI from resourceRelation href: {href}')
+                self.log.warning(f'{indent}Skipping, not a collection: {href}')
                 result.append(match.group(0))
                 prev_end = match.end()
                 continue
