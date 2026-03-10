@@ -1,0 +1,275 @@
+"""
+Tests for XmlTransformService.
+"""
+
+import unittest
+from unittest.mock import Mock, MagicMock
+from arcflow.services.xml_transform_service import XmlTransformService
+
+
+class TestXmlTransformService(unittest.TestCase):
+    """Test cases for XmlTransformService."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_client = Mock()
+        self.mock_log = Mock()
+        self.service = XmlTransformService(client=self.mock_client, log=self.mock_log)
+
+    def test_add_creator_ids_to_origination(self):
+        """Test adding authfilenumber attributes to origination elements."""
+        xml_content = '''<ead>
+<origination label="Creator">
+  <corpname source="lcnaf">Test Corporation</corpname>
+</origination>
+</ead>'''
+
+        resource = {
+            'linked_agents': [
+                {'role': 'creator', 'ref': '/agents/corporate_entities/123'}
+            ]
+        }
+
+        result = self.service.add_creator_ids_to_origination(xml_content, resource)
+
+        self.assertIn('authfilenumber="creator_corporate_entities_123"', result)
+        self.assertIn('<corpname', result)
+
+    def test_add_creator_ids_multiple_creators(self):
+        """Test adding authfilenumber to multiple origination elements."""
+        xml_content = '''<ead>
+<origination label="Creator">
+  <corpname source="lcnaf">First Corp</corpname>
+</origination>
+<origination label="Creator">
+  <persname source="lcnaf">Second Person</persname>
+</origination>
+</ead>'''
+
+        resource = {
+            'linked_agents': [
+                {'role': 'creator', 'ref': '/agents/corporate_entities/123'},
+                {'role': 'creator', 'ref': '/agents/people/456'}
+            ]
+        }
+
+        result = self.service.add_creator_ids_to_origination(xml_content, resource)
+
+        self.assertIn('authfilenumber="creator_corporate_entities_123"', result)
+        self.assertIn('authfilenumber="creator_people_456"', result)
+
+    def test_add_creator_ids_no_creators(self):
+        """Test that XML is unchanged when there are no creators."""
+        xml_content = '<ead><origination><corpname>Test</corpname></origination></ead>'
+        resource = {'linked_agents': []}
+
+        result = self.service.add_creator_ids_to_origination(xml_content, resource)
+
+        self.assertEqual(xml_content, result)
+
+    def test_inject_collection_metadata_with_all_fields(self):
+        """Test injecting record group, subgroup, and bioghist."""
+        xml_content = '''<ead>
+<archdesc level="collection">
+  <did>
+    <unittitle>Test Collection</unittitle>
+  </did>
+</archdesc>
+</ead>'''
+
+        result = self.service.inject_collection_metadata(
+            xml_content,
+            record_group='RG 1 — Test Group',
+            subgroup='SG 1.1 — Test Subgroup',
+            bioghist_content='<bioghist><p>Test bioghist</p></bioghist>'
+        )
+
+        self.assertIn('<recordgroup>RG 1 — Test Group</recordgroup>', result)
+        self.assertIn('<subgroup>SG 1.1 — Test Subgroup</subgroup>', result)
+        self.assertIn('<bioghist><p>Test bioghist</p></bioghist>', result)
+
+    def test_inject_collection_metadata_into_existing_bioghist(self):
+        """Test that bioghist content is inserted into existing bioghist element."""
+        xml_content = '''<ead>
+<archdesc level="collection">
+  <did>
+    <unittitle>Test Collection</unittitle>
+  </did>
+  <bioghist>
+    <p>Existing content</p>
+  </bioghist>
+</archdesc>
+</ead>'''
+
+        result = self.service.inject_collection_metadata(
+            xml_content,
+            record_group=None,
+            subgroup=None,
+            bioghist_content='<bioghist><p>New content</p></bioghist>'
+        )
+
+        # Should insert before </bioghist>
+        self.assertIn('Existing content', result)
+        self.assertIn('New content', result)
+        # Should not create a new bioghist wrapper
+        self.assertEqual(result.count('<bioghist>'), 2)  # Original + inserted
+
+    def test_inject_collection_metadata_xml_escaping(self):
+        """Test that special XML characters are properly escaped."""
+        xml_content = '''<ead>
+<archdesc level="collection">
+  <did>
+    <unittitle>Test</unittitle>
+  </did>
+</archdesc>
+</ead>'''
+
+        result = self.service.inject_collection_metadata(
+            xml_content,
+            record_group='Group & Co <test>',
+            subgroup=None,
+            bioghist_content=None
+        )
+
+        self.assertIn('Group &amp; Co &lt;test&gt;', result)
+        self.assertNotIn('Group & Co <test>', result)
+
+    def test_add_collection_links_to_eac_cpf(self):
+        """Test adding ead_id descriptiveNote to resourceRelation elements."""
+        eac_cpf_xml = '''<eac-cpf>
+<resourceRelation resourceRelationType="creatorOf" xlink:href="https://aspace.test/repositories/2/resources/123">
+  <relationEntry>Test Collection</relationEntry>
+</resourceRelation>
+</eac-cpf>'''
+
+        # Mock the client response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'ead_id': 'TEST.1.2.3'}
+        self.mock_client.get.return_value = mock_response
+
+        result = self.service.add_collection_links_to_eac_cpf(eac_cpf_xml)
+
+        self.assertIn('<descriptiveNote>', result)
+        self.assertIn('<p>ead_id:TEST.1.2.3</p>', result)
+        self.assertIn('</descriptiveNote>', result)
+
+    def test_add_collection_links_idempotent(self):
+        """Test that adding collection links is idempotent."""
+        eac_cpf_xml = '''<eac-cpf>
+<resourceRelation resourceRelationType="creatorOf" xlink:href="https://aspace.test/repositories/2/resources/123">
+  <relationEntry>Test Collection</relationEntry>
+  <descriptiveNote>
+    <p>ead_id:TEST.1.2.3</p>
+  </descriptiveNote>
+</resourceRelation>
+</eac-cpf>'''
+
+        result = self.service.add_collection_links_to_eac_cpf(eac_cpf_xml)
+
+        # Should not call the client since descriptiveNote already exists
+        self.mock_client.get.assert_not_called()
+        # Should return unchanged XML
+        self.assertEqual(eac_cpf_xml, result)
+
+    def test_add_collection_links_skips_digital_objects(self):
+        """Test that digital object URLs are skipped silently."""
+        eac_cpf_xml = '''<eac-cpf>
+<resourceRelation resourceRelationType="creatorOf" xlink:href="https://aspace.test/repositories/2/digital_objects/123">
+  <relationEntry>Test Digital Object</relationEntry>
+</resourceRelation>
+</eac-cpf>'''
+
+        result = self.service.add_collection_links_to_eac_cpf(eac_cpf_xml)
+
+        # Should not call the client
+        self.mock_client.get.assert_not_called()
+        # Should return unchanged XML
+        self.assertEqual(eac_cpf_xml, result)
+
+    def test_add_collection_links_handles_fetch_errors(self):
+        """Test that fetch errors are handled gracefully."""
+        eac_cpf_xml = '''<eac-cpf>
+<resourceRelation resourceRelationType="creatorOf" xlink:href="https://aspace.test/repositories/2/resources/123">
+  <relationEntry>Test Collection</relationEntry>
+</resourceRelation>
+</eac-cpf>'''
+
+        # Mock a 404 response
+        mock_response = Mock()
+        mock_response.status_code = 404
+        self.mock_client.get.return_value = mock_response
+
+        result = self.service.add_collection_links_to_eac_cpf(eac_cpf_xml)
+
+        # Should log a warning
+        self.mock_log.warning.assert_called()
+        # Should return unchanged XML
+        self.assertNotIn('<descriptiveNote>', result)
+
+    def test_build_bioghist_element(self):
+        """Test building bioghist XML element from structured data."""
+        result = self.service.build_bioghist_element(
+            agent_name='Test Agent',
+            persistent_id='abc123',
+            paragraphs=['<p>First paragraph</p>', '<p>Second paragraph</p>']
+        )
+
+        self.assertIn('<bioghist id="aspace_abc123">', result)
+        self.assertIn('<head>Historical Note from Test Agent Creator Record</head>', result)
+        self.assertIn('<p>First paragraph</p>', result)
+        self.assertIn('<p>Second paragraph</p>', result)
+        self.assertIn('</bioghist>', result)
+
+    def test_build_bioghist_element_without_persistent_id(self):
+        """Test building bioghist without persistent_id."""
+        result = self.service.build_bioghist_element(
+            agent_name='Test Agent',
+            persistent_id=None,
+            paragraphs=['<p>Content</p>']
+        )
+
+        self.assertIn('<bioghist>', result)
+        self.assertNotIn('id=', result)
+        self.assertIn('<p>Content</p>', result)
+
+    def test_build_bioghist_element_escapes_agent_name(self):
+        """Test that agent name is properly XML-escaped."""
+        result = self.service.build_bioghist_element(
+            agent_name='Agent & Co <test>',
+            persistent_id='abc',
+            paragraphs=['<p>Content</p>']
+        )
+
+        self.assertIn('Agent &amp; Co &lt;test&gt;', result)
+
+    def test_validate_eac_cpf_xml_valid(self):
+        """Test validating valid EAC-CPF XML."""
+        eac_cpf_xml = '<eac-cpf><control></control></eac-cpf>'
+
+        root = self.service.validate_eac_cpf_xml(eac_cpf_xml, '/agents/corporate_entities/123')
+
+        self.assertIsNotNone(root)
+        self.assertEqual(root.tag, 'eac-cpf')
+
+    def test_validate_eac_cpf_xml_invalid(self):
+        """Test validating invalid EAC-CPF XML."""
+        eac_cpf_xml = '<eac-cpf><control>'  # Missing closing tags
+
+        root = self.service.validate_eac_cpf_xml(eac_cpf_xml, '/agents/corporate_entities/123')
+
+        self.assertIsNone(root)
+        self.mock_log.error.assert_called()
+
+    def test_add_collection_links_requires_client(self):
+        """Test that add_collection_links_to_eac_cpf requires a client."""
+        service_no_client = XmlTransformService(client=None)
+
+        with self.assertRaises(ValueError) as context:
+            service_no_client.add_collection_links_to_eac_cpf('<eac-cpf></eac-cpf>')
+
+        self.assertIn('Client is required', str(context.exception))
+
+
+if __name__ == '__main__':
+    unittest.main()
