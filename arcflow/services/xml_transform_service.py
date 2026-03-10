@@ -61,48 +61,46 @@ class XmlTransformService:
         if not creator_ids:
             return xml_content
 
-        # Match creator origination elements (label="Creator"); name elements within get authfilenumber in order
-        origination_pattern = re.compile(
-            r'<origination(?=[^>]*\blabel=(?:"Creator"|\'Creator\'))[^>]*>.*?</origination>',
-            re.DOTALL,
-        )
-        name_start_pattern = re.compile(r'<(corpname|persname|famname)((?:\s[^>]*)?)(>|/>)')
-
-        result = []
-        prev_end = 0
-        creator_idx = 0
-
-        for orig_match in origination_pattern.finditer(xml_content):
-            result.append(xml_content[prev_end:orig_match.start()])
-            orig_text = orig_match.group()
-
-            if creator_idx < len(creator_ids):
-                creator_id = creator_ids[creator_idx]
-                name_match = name_start_pattern.search(orig_text)
-                if name_match:
-                    if 'authfilenumber' not in name_match.group(2):
-                        new_tag = (f'<{name_match.group(1)}{name_match.group(2)}'
-                                   f' authfilenumber="{creator_id}"{name_match.group(3)}')
-                        orig_text = (
-                            orig_text[:name_match.start()] + new_tag + orig_text[name_match.end():]
-                        )
-                        creator_idx += 1
+        try:
+            # Parse the XML
+            root = ET.fromstring(xml_content)
+            
+            # Find all origination elements with label="Creator"
+            creator_idx = 0
+            for origination in root.iter('origination'):
+                if origination.get('label') == 'Creator' and creator_idx < len(creator_ids):
+                    creator_id = creator_ids[creator_idx]
+                    
+                    # Find the first name element (corpname, persname, or famname)
+                    name_elem = None
+                    for tag in ['corpname', 'persname', 'famname']:
+                        name_elem = origination.find(tag)
+                        if name_elem is not None:
+                            break
+                    
+                    if name_elem is not None:
+                        if name_elem.get('authfilenumber') is None:
+                            # Add the authfilenumber attribute
+                            name_elem.set('authfilenumber', creator_id)
+                            creator_idx += 1
+                        else:
+                            # Name element already has an authfilenumber
+                            self.log.debug(
+                                f'{indent}Skipping creator ID {creator_id}: name element already has authfilenumber'
+                            )
                     else:
-                        # Name element already has an authfilenumber; keep creator index for next origination
+                        # No eligible name element found
                         self.log.debug(
-                            f'{indent}Skipping creator ID {creator_id}: name element already has authfilenumber'
+                            f'{indent}No eligible name element in <origination> for creator ID {creator_id}'
                         )
-                else:
-                    # No eligible name element found; keep creator index for next origination
-                    self.log.debug(
-                        f'{indent}No eligible name element in <origination> for creator ID {creator_id}'
-                    )
-
-            result.append(orig_text)
-            prev_end = orig_match.end()
-
-        result.append(xml_content[prev_end:])
-        return ''.join(result)
+            
+            # Convert back to string, preserving XML declaration if present
+            result = ET.tostring(root, encoding='unicode', method='xml')
+            return result
+            
+        except ET.ParseError as e:
+            self.log.error(f'{indent}Failed to parse EAD XML: {e}. Returning original content.')
+            return xml_content
 
     def inject_collection_metadata(
         self,
@@ -127,49 +125,79 @@ class XmlTransformService:
         Returns:
             str: Modified EAD XML string
         """
-        insert_pos = xml_content.find('<archdesc level="collection">')
-
-        if insert_pos == -1:
+        try:
+            # Parse the XML
+            root = ET.fromstring(xml_content)
+            
+            # Find the archdesc element with level="collection"
+            archdesc = None
+            for elem in root.iter('archdesc'):
+                if elem.get('level') == 'collection':
+                    archdesc = elem
+                    break
+            
+            if archdesc is None:
+                return xml_content
+            
+            # Find the did element within archdesc
+            did = archdesc.find('did')
+            if did is None:
+                return xml_content
+            
+            # Find the position to insert after did
+            did_index = list(archdesc).index(did)
+            insert_index = did_index + 1
+            
+            # Add record group and subgroup labels
+            if record_group:
+                recordgroup = ET.Element('recordgroup')
+                recordgroup.text = record_group
+                archdesc.insert(insert_index, recordgroup)
+                insert_index += 1
+                
+                if subgroup:
+                    subgroup_elem = ET.Element('subgroup')
+                    subgroup_elem.text = subgroup
+                    archdesc.insert(insert_index, subgroup_elem)
+                    insert_index += 1
+            
+            # Handle biographical/historical notes
+            if bioghist_content:
+                # Check if there's already a bioghist element in archdesc
+                existing_bioghist = None
+                for elem in archdesc:
+                    if elem.tag == 'bioghist':
+                        existing_bioghist = elem
+                        break
+                
+                # Parse the bioghist content to add
+                try:
+                    # Wrap in a temporary root to handle multiple bioghist elements
+                    bioghist_wrapper = ET.fromstring(f'<wrapper>{bioghist_content}</wrapper>')
+                    bioghist_elements = list(bioghist_wrapper)
+                    
+                    if existing_bioghist is not None:
+                        # Append new bioghist elements inside the existing bioghist
+                        for bioghist_elem in bioghist_elements:
+                            existing_bioghist.append(bioghist_elem)
+                    else:
+                        # Create new bioghist wrapper and add the elements
+                        new_bioghist = ET.Element('bioghist')
+                        for bioghist_elem in bioghist_elements:
+                            for child in bioghist_elem:
+                                new_bioghist.append(child)
+                        archdesc.insert(insert_index, new_bioghist)
+                        
+                except ET.ParseError as e:
+                    self.log.warning(f'Failed to parse bioghist content: {e}')
+            
+            # Convert back to string
+            result = ET.tostring(root, encoding='unicode', method='xml')
+            return result
+            
+        except ET.ParseError as e:
+            self.log.error(f'Failed to parse EAD XML: {e}. Returning original content.')
             return xml_content
-
-        did_end_pos = xml_content.find('</did>', insert_pos)
-        if did_end_pos == -1:
-            return xml_content
-
-        did_end_pos += len('</did>')
-        extra_xml = ''
-
-        # Add record group and subgroup labels
-        if record_group:
-            extra_xml += f'\n<recordgroup>{xml_escape(record_group)}</recordgroup>'
-            if subgroup:
-                extra_xml += f'\n<subgroup>{xml_escape(subgroup)}</subgroup>'
-
-        # Handle biographical/historical notes
-        if bioghist_content:
-            archdesc_end = xml_content.find('</archdesc>', did_end_pos)
-            search_section = (xml_content[did_end_pos:archdesc_end]
-                            if archdesc_end != -1 else xml_content[did_end_pos:])
-
-            existing_bioghist_end = search_section.rfind('</bioghist>')
-
-            if existing_bioghist_end != -1:
-                # Insert into existing bioghist
-                insert_pos = did_end_pos + existing_bioghist_end
-                xml_content = (xml_content[:insert_pos] +
-                              f'\n{bioghist_content}\n' +
-                              xml_content[insert_pos:])
-            else:
-                # Create new bioghist wrapper
-                wrapped_content = f'<bioghist>\n{bioghist_content}\n</bioghist>'
-                extra_xml += f'\n{wrapped_content}'
-
-        if extra_xml:
-            xml_content = (xml_content[:did_end_pos] +
-                          extra_xml +
-                          xml_content[did_end_pos:])
-
-        return xml_content
 
     def add_collection_links_to_eac_cpf(self, eac_cpf_xml: str, indent_size: int = 0) -> str:
         """
@@ -194,89 +222,106 @@ class XmlTransformService:
             raise ValueError("Client is required for add_collection_links_to_eac_cpf operation")
 
         indent = ' ' * indent_size
+        
+        # Save the original XML to return if no changes are made
+        original_xml = eac_cpf_xml
 
-        # Match creatorOf resourceRelation elements (handles any attribute ordering)
-        resource_relation_pattern = re.compile(
-            r'(<resourceRelation\b[^>]*?\bresourceRelationType=["\']creatorOf["\'][^>]*?>)'
-            r'(.*?)'
-            r'(</resourceRelation>)',
-            re.DOTALL
-        )
-
-        result = []
-        prev_end = 0
-
-        for match in resource_relation_pattern.finditer(eac_cpf_xml):
-            result.append(eac_cpf_xml[prev_end:match.start()])
-
-            opening_tag = match.group(1)
-            content = match.group(2)
-            closing_tag = match.group(3)
-
-            # Idempotent: skip if our descriptiveNote with ead_id pattern already added
-            # Check for the specific pattern we create: <descriptiveNote><p>ead_id:...</p></descriptiveNote>
-            if re.search(r'<descriptiveNote>\s*<p>ead_id:[^<]+</p>\s*</descriptiveNote>', content):
-                result.append(match.group(0))
-                prev_end = match.end()
-                continue
-
-            # Extract xlink:href from opening tag
-            href_match = re.search(r'xlink:href=["\']([^"\']+)["\']', opening_tag)
-            if not href_match:
-                result.append(match.group(0))
-                prev_end = match.end()
-                continue
-
-            href = href_match.group(1)
-
-            # Only process resource URLs (skip digital_objects, etc.)
-            # Pattern: repositories/{number}/resources/{number}
-            uri_match = re.search(r'/repositories/(\d+)/resources/(\d+)', href)
-            if not uri_match:
-                # Not a resource URL (likely digital_object or other type) - skip silently
-                result.append(match.group(0))
-                prev_end = match.end()
-                continue
-
-            res_repo_id = uri_match.group(1)
-            res_resource_id = uri_match.group(2)
-
-            # Fetch resource to get ead_id; skip on any error
+        try:
+            # Parse the XML, handling potential namespace issues
             try:
-                response = self.client.get(f'/repositories/{res_repo_id}/resources/{res_resource_id}')
-                if response.status_code != 200:
-                    self.log.warning(
-                        f'{indent}Could not fetch resource {href}: HTTP {response.status_code}. '
-                        'Skipping collection link.')
-                    result.append(match.group(0))
-                    prev_end = match.end()
+                root = ET.fromstring(eac_cpf_xml)
+            except ET.ParseError:
+                # If parsing fails, it might be due to undeclared namespaces
+                # Try to fix by adding namespace declarations
+                if 'xlink:' in eac_cpf_xml and 'xmlns:xlink' not in eac_cpf_xml:
+                    # Add xlink namespace declaration to root element
+                    eac_cpf_xml = eac_cpf_xml.replace('<eac-cpf>', '<eac-cpf xmlns:xlink="http://www.w3.org/1999/xlink">', 1)
+                root = ET.fromstring(eac_cpf_xml)
+            
+            # Track if any changes were made
+            changes_made = False
+            
+            # Find all resourceRelation elements with resourceRelationType="creatorOf"
+            for resource_relation in root.iter('resourceRelation'):
+                if resource_relation.get('resourceRelationType') != 'creatorOf':
                     continue
-
-                resource = response.json()
-                ead_id = resource.get('ead_id')
-                if not ead_id:
-                    self.log.warning(
-                        f'{indent}Resource /repositories/{res_repo_id}/resources/{res_resource_id} '
-                        'has no ead_id. Skipping collection link.')
-                    result.append(match.group(0))
-                    prev_end = match.end()
+                
+                # Check if descriptiveNote with ead_id pattern already exists
+                has_ead_id_note = False
+                for desc_note in resource_relation.findall('descriptiveNote'):
+                    for p in desc_note.findall('p'):
+                        if p.text and p.text.startswith('ead_id:'):
+                            has_ead_id_note = True
+                            break
+                    if has_ead_id_note:
+                        break
+                
+                if has_ead_id_note:
+                    # Already has our descriptiveNote, skip
                     continue
-
-                descriptive_note = (
-                    f'\n    <descriptiveNote>\n'
-                    f'      <p>ead_id:{ead_id}</p>\n'
-                    f'    </descriptiveNote>'
-                )
-                result.append(opening_tag + content + descriptive_note + '\n  ' + closing_tag)
-
-            except Exception as e:
-                self.log.warning(f'{indent}Could not fetch resource for {href}: {e}. Skipping collection link.')
-                result.append(match.group(0))
-
-            prev_end = match.end()
-
-        result.append(eac_cpf_xml[prev_end:])
-        return ''.join(result)
+                
+                # Extract href attribute - try multiple variations
+                href = None
+                # Try with xlink namespace
+                for attr_key in resource_relation.attrib:
+                    if 'href' in attr_key:
+                        href = resource_relation.attrib[attr_key]
+                        break
+                
+                if not href:
+                    continue
+                
+                # Only process resource URLs (skip digital_objects, etc.)
+                # Pattern: repositories/{number}/resources/{number}
+                uri_match = re.search(r'/repositories/(\d+)/resources/(\d+)', href)
+                if not uri_match:
+                    # Not a resource URL (likely digital_object or other type) - skip silently
+                    continue
+                
+                res_repo_id = uri_match.group(1)
+                res_resource_id = uri_match.group(2)
+                
+                # Fetch resource to get ead_id; skip on any error
+                try:
+                    response = self.client.get(f'/repositories/{res_repo_id}/resources/{res_resource_id}')
+                    if response.status_code != 200:
+                        self.log.warning(
+                            f'{indent}Could not fetch resource {href}: HTTP {response.status_code}. '
+                            'Skipping collection link.')
+                        continue
+                    
+                    resource = response.json()
+                    ead_id = resource.get('ead_id')
+                    if not ead_id:
+                        self.log.warning(
+                            f'{indent}Resource /repositories/{res_repo_id}/resources/{res_resource_id} '
+                            'has no ead_id. Skipping collection link.')
+                        continue
+                    
+                    # Create descriptiveNote element with ead_id
+                    descriptive_note = ET.Element('descriptiveNote')
+                    p = ET.SubElement(descriptive_note, 'p')
+                    p.text = f'ead_id:{ead_id}'
+                    
+                    # Append to resourceRelation
+                    resource_relation.append(descriptive_note)
+                    changes_made = True
+                    
+                except Exception as e:
+                    self.log.warning(f'{indent}Could not fetch resource for {href}: {e}. Skipping collection link.')
+                    continue
+            
+            # Only convert back to string if changes were made
+            if changes_made:
+                result = ET.tostring(root, encoding='unicode', method='xml')
+                return result
+            else:
+                # Return original XML (not the potentially modified version with namespace)
+                return original_xml
+            
+        except ET.ParseError as e:
+            self.log.error(f'{indent}Failed to parse EAC-CPF XML: {e}. Returning original content.')
+            return original_xml
 
     def build_bioghist_element(
         self,
