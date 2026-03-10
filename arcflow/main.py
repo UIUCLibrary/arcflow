@@ -271,7 +271,7 @@ class ArcFlow:
 
                 # Add authfilenumber attributes to origination name elements
                 # (links creator names in EAD to their Solr creator records)
-                xml_content = self.add_creator_ids_to_origination(xml_content, resource, indent_size=indent_size)
+                xml_content = self.xml_transform.add_creator_ids_to_origination(xml_content, resource, indent_size=indent_size)
 
                 # Get record group and subgroup labels
                 rg_label, sg_label = extract_labels(resource)[1:3]
@@ -625,12 +625,9 @@ class ArcFlow:
             if linked_agent.get('role') == 'creator':
                 agent_ref = linked_agent.get('ref')
                 if agent_ref:
-                    # STEP 1: Get data from AgentService
                     bioghist_data = self.agent_service.get_agent_bioghist_data(
                         agent_ref, indent_size=indent_size
                     )
-
-                    # STEP 2: Convert data to XML using XmlTransformService
                     if bioghist_data:
                         bioghist_xml = self.xml_transform.build_bioghist_element(
                             bioghist_data['agent_name'],
@@ -645,38 +642,6 @@ class ArcFlow:
             # an existing bioghist element exists
             return '\n'.join(bioghist_elements)
         return None
-
-    def add_creator_ids_to_origination(self, xml_content, resource, indent_size=0):
-        """
-        Add authfilenumber attributes to name elements inside <origination> elements in EAD XML.
-
-        Delegates to XmlTransformService for the actual transformation.
-
-        Args:
-            xml_content: EAD XML as a string
-            resource: ArchivesSpace resource record with resolved linked_agents
-            indent_size: Indentation size for logging
-
-        Returns:
-            str: Modified EAD XML string
-        """
-        return self.xml_transform.add_creator_ids_to_origination(xml_content, resource, indent_size)
-
-    def add_collection_links_to_eac_cpf(self, eac_cpf_xml, indent_size=0):
-        """
-        Add <descriptiveNote><p>ead_id:{ead_id}</p></descriptiveNote> to
-        <resourceRelation resourceRelationType="creatorOf"> elements in EAC-CPF XML.
-
-        Delegates to XmlTransformService for the actual transformation.
-
-        Args:
-            eac_cpf_xml: EAC-CPF XML as a string
-            indent_size: Indentation size for logging
-
-        Returns:
-            str: Modified EAC-CPF XML string
-        """
-        return self.xml_transform.add_collection_links_to_eac_cpf(eac_cpf_xml, indent_size)
 
     def _get_target_agent_criteria(self, modified_since=0):
         """
@@ -857,7 +822,7 @@ class ArcFlow:
                 return None
 
             # Add collection ead_ids to resourceRelation creatorOf elements
-            eac_cpf_xml = self.add_collection_links_to_eac_cpf(eac_cpf_xml, indent_size=indent_size)
+            eac_cpf_xml = self.xml_transform.add_collection_links_to_eac_cpf(eac_cpf_xml, indent_size=indent_size)
 
             # Generate creator ID
             creator_id = f'creator_{agent_type}_{agent_id}'
