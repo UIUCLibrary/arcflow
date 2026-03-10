@@ -806,8 +806,9 @@ class ArcFlow:
             content = match.group(2)
             closing_tag = match.group(3)
 
-            # Idempotent: skip if descriptiveNote already added
-            if '<descriptiveNote>' in content:
+            # Idempotent: skip if our descriptiveNote with ead_id pattern already added
+            # Check for the specific pattern we create: <descriptiveNote><p>ead_id:...</p></descriptiveNote>
+            if re.search(r'<descriptiveNote>\s*<p>ead_id:[^<]+</p>\s*</descriptiveNote>', content):
                 result.append(match.group(0))
                 prev_end = match.end()
                 continue
