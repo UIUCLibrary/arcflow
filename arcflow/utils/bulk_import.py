@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 from asnake.client import ASnakeClient
+import re
 
 
 def __get_asnake_client():
@@ -207,7 +208,7 @@ def save_report(path, report_list, validate_only):
 
     report_csv_file_name = report_file_name_stem + ".csv"
 
-    fieldnames = ['identifier','ead_id','aspace_url','import_date','repo_id', 'rid', 'only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri',"csv_issue_count"]
+    fieldnames = ['identifier','ead_id','aspace_url','import_date','repo_id', 'rid', 'only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri',"csv_issue_count","csv_issue_count_top_container","csv_issue_count_unable_container"]
     
     csv_report_save_path = os.path.join(report_save_path, report_csv_file_name)
     with open(csv_report_save_path, "w", newline="", encoding='utf-8') as csvfile:
@@ -235,12 +236,17 @@ def check_job_status(asnake_client, repo_id, job_id):
 
 def retrieve_job_output(path, report_list, asnake_client):
     """Function to retrieve and save last created output files for each job in the bulk import."""
+    total_count = len(report_list)
+    count = 0
     for row in report_list:
         if "results_id" not in row:
             continue
         repo_id = row["repo_id"]
         job_id = row["results_id"]
         identifier = row["identifier"]
+        ead_id = row["ead_id"]
+        count += 1
+        print(f"Retrieving job output for {ead_id} ({identifier}), finding aid csv {count} out of {total_count}")
         if not check_job_status(asnake_client, repo_id, job_id):
             print(f"Error downloading files for job {job_id}")
             continue
@@ -260,10 +266,14 @@ def retrieve_job_output(path, report_list, asnake_client):
             print(f"File {output_file_name} downloaded successfully.")
             issue_count = check_job_output("Info or Error",output_file_path)
             row["csv_issue_count"] = issue_count
+            issue_count_top_container = check_job_output("Info or Error",output_file_path,r"Top Container \[.+\]( would be)? created")
+            row["csv_issue_count_top_container"] = issue_count_top_container
+            issue_count_unable_container = check_job_output("Info or Error",output_file_path,r"Unable to create Container Instance 1:")
+            row["csv_issue_count_unable_container"] = issue_count_unable_container
         else:
             report_csv_error(row, f"Failed to retrieve file for identifier {identifier} and job id {job_id}. Status code: {response.status_code}")
 
-def check_job_output(column_heading, file_path):
+def check_job_output(column_heading, file_path, pattern=""):
     """Function to check whether any data was logged in a specified column of a CSV at a given path, and if so how many rows have data in them. Returns -1 for errors."""
     if not os.path.exists(file_path):
         print(f"Error: File '{file_path}' does not exist.")
@@ -281,7 +291,11 @@ def check_job_output(column_heading, file_path):
             for row in reader:
                 value = row.get(column_heading)
                 if value and value.strip():
-                    count += 1
+                    if pattern == "":
+                        count += 1
+                    else:
+                        pattern_match = re.match(pattern, value)
+                        if pattern_match: count += 1
             return count
 
     except FileNotFoundError:
