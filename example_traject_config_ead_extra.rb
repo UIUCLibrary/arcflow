@@ -46,7 +46,7 @@ to_field 'creator_arclight_ids_ssim' do |record, accumulator|
                 //ead:archdesc/ead:did/ead:origination/ead:persname[@arcuit:creator_id] |
                 //ead:archdesc/ead:did/ead:origination/ead:famname[@arcuit:creator_id]',
                arcuit_ns).each do |node|
-    accumulator << node['creator_id']  # ElementTree uses local name without namespace prefix
+    accumulator << node['arcuit:creator_id']
   end
 
   # Also check without EAD namespace (some ASpace EAD exports omit it)
