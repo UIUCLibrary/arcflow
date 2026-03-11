@@ -55,7 +55,7 @@ to_field 'creator_arclight_ids_ssim' do |record, accumulator|
                   //archdesc/did/origination/persname[@arcuit:creator_id] |
                   //archdesc/did/origination/famname[@arcuit:creator_id]',
                  arcuit_ns).each do |node|
-      accumulator << node['creator_id']
+      accumulator << node['arcuit:creator_id']
     end
   end
 end
