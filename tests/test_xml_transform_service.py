@@ -198,18 +198,18 @@ class TestXmlTransformService(unittest.TestCase):
     def test_multiple_creators_with_namespace(self):
             """Test handling multiple creators when EAD has default namespace."""
             xml_with_namespace = '''<?xml version="1.0" encoding="UTF-8"?>
-                                        <ead xmlns="urn:isbn:1-931666-22-9">
-                                          <archdesc level="collection">
-                                            <did>
-                                              <origination label="Creator">
-                                                <corpname source="lcnaf">First Corp</corpname>
-                                              </origination>
-                                              <origination label="Creator">
-                                                <persname source="lcnaf">Second Person</persname>
-                                              </origination>
-                                            </did>
-                                          </archdesc>
-                                        </ead>'''
+<ead xmlns="urn:isbn:1-931666-22-9">
+  <archdesc level="collection">
+    <did>
+      <origination label="Creator">
+        <corpname source="lcnaf">First Corp</corpname>
+      </origination>
+      <origination label="Creator">
+        <persname source="lcnaf">Second Person</persname>
+      </origination>
+    </did>
+  </archdesc>
+</ead>'''
 
             resource = {
                 'linked_agents': [
@@ -225,6 +225,7 @@ class TestXmlTransformService(unittest.TestCase):
             self.assertIn('creator_id="creator_people_456"', result)
             # Should preserve namespace
             self.assertIn('urn:isbn:1-931666-22-9', result)
+
     def test_add_collection_links_idempotent(self):
         """Test that adding collection links is idempotent."""
         eac_cpf_xml = '''<eac-cpf>
