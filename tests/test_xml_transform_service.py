@@ -196,8 +196,8 @@ class TestXmlTransformService(unittest.TestCase):
         self.assertIn('urn:isbn:1-931666-33-4', result)
 
     def test_multiple_creators_with_namespace(self):
-            """Test handling multiple creators when EAD has default namespace."""
-            xml_with_namespace = '''<?xml version="1.0" encoding="UTF-8"?>
+        """Test handling multiple creators when EAD has default namespace."""
+        xml_with_namespace = '''<?xml version="1.0" encoding="UTF-8"?>
 <ead xmlns="urn:isbn:1-931666-22-9">
   <archdesc level="collection">
     <did>
