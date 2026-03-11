@@ -16,13 +16,13 @@ class TestXmlTransformService(unittest.TestCase):
         self.mock_log = Mock()
         self.service = XmlTransformService(client=self.mock_client, log=self.mock_log)
 
-    def test_add_creator_ids_to_origination(self):
-        """Test adding authfilenumber attributes to origination elements."""
-        xml_content = '''<ead>
-<origination label="Creator">
-  <corpname source="lcnaf">Test Corporation</corpname>
-</origination>
-</ead>'''
+    def test_add_creator_ids_to_ead(self):
+        """Test adding arcuit:creator_id attributes to origination elements."""
+        ead = '''<ead>
+        <origination label="Creator">
+          <corpname source="lcnaf">Test Corporation</corpname>
+        </origination>
+        </ead>'''
 
         resource = {
             'linked_agents': [
@@ -30,9 +30,13 @@ class TestXmlTransformService(unittest.TestCase):
             ]
         }
 
-        result = self.service.add_creator_ids_to_origination(xml_content, resource)
+        result = self.service.add_creator_ids_to_ead(ead, resource)
 
-        self.assertIn('authfilenumber="creator_corporate_entities_123"', result)
+        # Should contain namespace declaration
+        self.assertIn('xmlns:arcuit', result)
+        self.assertIn('https://arcuit.library.illinois.edu/ead-extensions', result)
+        # Should contain the creator_id attribute
+        self.assertIn('creator_id="creator_corporate_entities_123"', result)
         self.assertIn('<corpname', result)
 
     def test_add_creator_ids_multiple_creators(self):
@@ -53,7 +57,7 @@ class TestXmlTransformService(unittest.TestCase):
             ]
         }
 
-        result = self.service.add_creator_ids_to_origination(xml_content, resource)
+        result = self.service.add_creator_ids_to_ead(xml_content, resource)
 
         self.assertIn('authfilenumber="creator_corporate_entities_123"', result)
         self.assertIn('authfilenumber="creator_people_456"', result)
@@ -63,7 +67,7 @@ class TestXmlTransformService(unittest.TestCase):
         xml_content = '<ead><origination><corpname>Test</corpname></origination></ead>'
         resource = {'linked_agents': []}
 
-        result = self.service.add_creator_ids_to_origination(xml_content, resource)
+        result = self.service.add_creator_ids_to_ead(xml_content, resource)
 
         self.assertEqual(xml_content, result)
 

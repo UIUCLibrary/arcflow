@@ -29,21 +29,23 @@ class XmlTransformService:
         self.client = client
         self.log = log or logging.getLogger(__name__)
 
-    def add_creator_ids_to_origination(self, xml_content: str, resource: dict, indent_size: int = 0) -> str:
+    def add_creator_ids_to_ead(self, ead: str, resource: dict, indent_size: int = 0) -> str:
         """
-        Add authfilenumber attributes to name elements inside <origination> elements in EAD XML.
+        Add arcuit:creator_id attributes to name elements inside <origination> elements in EAD XML.
+
+        Uses a custom namespace (xmlns:arcuit="https://arcuit.library.illinois.edu/ead-extensions") to avoid
+        collisions with standard EAD attributes like authfilenumber.
 
         Maps linked_agents with role='creator' to origination elements by index order.
-        The authfilenumber value is a creator ID in the format creator_{type}_{id},
-        which is a valid EAD attribute for authority file identifiers.
+        The arcuit:creator_id value is a creator ID in the format creator_{type}_{id}.
 
         Args:
-            xml_content: EAD XML as a string
+            ead: EAD XML as a string
             resource: ArchivesSpace resource record with resolved linked_agents
             indent_size: Indentation size for logging
 
         Returns:
-            str: Modified EAD XML string
+            str: Modified EAD XML string with arcuit namespace and creator_id attributes
         """
         indent = ' ' * indent_size
 
@@ -59,52 +61,54 @@ class XmlTransformService:
                     self.log.warning(f'{indent}Could not parse creator ID from agent ref: {agent_ref}')
 
         if not creator_ids:
-            return xml_content
+            return ead
 
         try:
+            # Define the Arcuit namespace
+            arcuit_ns = "https://arcuit.library.illinois.edu/ead-extensions"
+            ET.register_namespace('arcuit', arcuit_ns)
+
             # Parse the XML
-            root = ET.fromstring(xml_content)
-            
+            root = ET.fromstring(ead)
+
+            # Add arcuit namespace declaration to root element if not present
+            if f'{{{arcuit_ns}}}' not in str(ET.tostring(root)):
+                root.attrib[f'{{http://www.w3.org/2000/xmlns/}}arcuit'] = arcuit_ns
+
             # Find all origination elements with label="Creator"
             creator_idx = 0
             for origination in root.iter('origination'):
                 if origination.get('label') == 'Creator' and creator_idx < len(creator_ids):
                     creator_id = creator_ids[creator_idx]
-                    
+
                     # Find the first name element (corpname, persname, or famname)
                     name_elem = None
                     for tag in ['corpname', 'persname', 'famname']:
                         name_elem = origination.find(tag)
                         if name_elem is not None:
                             break
-                    
+
                     if name_elem is not None:
-                        if name_elem.get('authfilenumber') is None:
-                            # Add the authfilenumber attribute
-                            name_elem.set('authfilenumber', creator_id)
-                            creator_idx += 1
-                        else:
-                            # Name element already has an authfilenumber
-                            self.log.debug(
-                                f'{indent}Skipping creator ID {creator_id}: name element already has authfilenumber'
-                            )
+                        # Add the arcuit:creator_id attribute (always, never skip)
+                        name_elem.set(f'{{{arcuit_ns}}}creator_id', creator_id)
+                        creator_idx += 1
                     else:
                         # No eligible name element found
                         self.log.debug(
                             f'{indent}No eligible name element in <origination> for creator ID {creator_id}'
                         )
-            
-            # Convert back to string, preserving XML declaration if present
+
+            # Convert back to string
             result = ET.tostring(root, encoding='unicode', method='xml')
             return result
-            
+
         except ET.ParseError as e:
             self.log.error(f'{indent}Failed to parse EAD XML: {e}. Returning original content.')
-            return xml_content
+            return ead
 
     def inject_collection_metadata(
         self,
-        xml_content: str,
+        ead: str,
         record_group: Optional[str],
         subgroup: Optional[str],
         bioghist_content: Optional[str]
@@ -117,7 +121,7 @@ class XmlTransformService:
         - Biographical/historical notes from creator agents
 
         Args:
-            xml_content: EAD XML as a string
+            ead: EAD XML as a string
             record_group: Record group label (e.g., "ALA 52 — Library Periodicals")
             subgroup: Subgroup label (e.g., "ALA 52.2 — Publications")
             bioghist_content: XML string of bioghist elements to inject
@@ -127,9 +131,8 @@ class XmlTransformService:
         """
         try:
             # Parse the XML
-            root = ET.fromstring(xml_content)
+            root = ET.fromstring(ead)
             
-            # Find the archdesc element with level="collection"
             archdesc = None
             for elem in root.iter('archdesc'):
                 if elem.get('level') == 'collection':
@@ -137,18 +140,15 @@ class XmlTransformService:
                     break
             
             if archdesc is None:
-                return xml_content
+                return ead
             
-            # Find the did element within archdesc
             did = archdesc.find('did')
             if did is None:
-                return xml_content
+                return ead
             
-            # Find the position to insert after did
             did_index = list(archdesc).index(did)
             insert_index = did_index + 1
             
-            # Add record group and subgroup labels
             if record_group:
                 recordgroup = ET.Element('recordgroup')
                 recordgroup.text = record_group
@@ -161,23 +161,19 @@ class XmlTransformService:
                     archdesc.insert(insert_index, subgroup_elem)
                     insert_index += 1
             
-            # Handle biographical/historical notes
             if bioghist_content:
-                # Check if there's already a bioghist element in archdesc
                 existing_bioghist = None
                 for elem in archdesc:
                     if elem.tag == 'bioghist':
                         existing_bioghist = elem
                         break
                 
-                # Parse the bioghist content to add
                 try:
                     # Wrap in a temporary root to handle multiple bioghist elements
                     bioghist_wrapper = ET.fromstring(f'<wrapper>{bioghist_content}</wrapper>')
                     bioghist_elements = list(bioghist_wrapper)
                     
                     if existing_bioghist is not None:
-                        # Append new bioghist elements inside the existing bioghist
                         for bioghist_elem in bioghist_elements:
                             existing_bioghist.append(bioghist_elem)
                     else:
@@ -191,13 +187,12 @@ class XmlTransformService:
                 except ET.ParseError as e:
                     self.log.warning(f'Failed to parse bioghist content: {e}')
             
-            # Convert back to string
             result = ET.tostring(root, encoding='unicode', method='xml')
             return result
             
         except ET.ParseError as e:
             self.log.error(f'Failed to parse EAD XML: {e}. Returning original content.')
-            return xml_content
+            return ead
 
     def add_collection_links_to_eac_cpf(self, eac_cpf_xml: str, indent_size: int = 0) -> str:
         """
