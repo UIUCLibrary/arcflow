@@ -181,22 +181,28 @@ class XmlTransformService:
                     # Wrap in a temporary root to handle multiple bioghist elements
                     bioghist_wrapper = ET.fromstring(f'<wrapper>{bioghist_content}</wrapper>')
                     bioghist_elements = list(bioghist_wrapper)
+
+                    def _qualify_namespace(elem):
+                        """
+                        Ensure elem and its descendants use the same namespace as the
+                        source EAD document when a default namespace is present.
+                        """
+                        if not namespace:
+                            return
+                        for child in elem.iter():
+                            if isinstance(child.tag, str) and not child.tag.startswith('{'):
+                                child.tag = f'{namespace}{child.tag}'
                     
                     if existing_bioghist is not None:
                         for bioghist_elem in bioghist_elements:
+                            _qualify_namespace(bioghist_elem)
                             existing_bioghist.append(bioghist_elem)
                     else:
                         # No existing bioghist: insert each parsed bioghist element
                         # directly into archdesc to preserve creator-level wrappers
                         # and attributes (e.g., id) returned by get_creator_bioghist.
                         for bioghist_elem in bioghist_elements:
-                            # If there's a namespace, update the bioghist tag to include it
-                            if namespace and not bioghist_elem.tag.startswith('{'):
-                                bioghist_elem.tag = f'{namespace}{bioghist_elem.tag}'
-                                # Also update child element tags
-                                for child in bioghist_elem.iter():
-                                    if not child.tag.startswith('{'):
-                                        child.tag = f'{namespace}{child.tag}'
+                            _qualify_namespace(bioghist_elem)
                             archdesc.insert(insert_index, bioghist_elem)
                             insert_index += 1
                         
