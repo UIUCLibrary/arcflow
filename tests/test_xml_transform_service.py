@@ -284,7 +284,7 @@ class TestXmlTransformService(unittest.TestCase):
         result = self.service.build_bioghist_element(
             agent_name='Test Agent',
             persistent_id='abc123',
-            paragraphs=['<p>First paragraph</p>', '<p>Second paragraph</p>']
+            paragraphs=['First paragraph', 'Second paragraph']
         )
 
         self.assertIn('<bioghist id="aspace_abc123">', result)
@@ -298,7 +298,7 @@ class TestXmlTransformService(unittest.TestCase):
         result = self.service.build_bioghist_element(
             agent_name='Test Agent',
             persistent_id=None,
-            paragraphs=['<p>Content</p>']
+            paragraphs=['Content']
         )
 
         self.assertIn('<bioghist>', result)
@@ -310,10 +310,21 @@ class TestXmlTransformService(unittest.TestCase):
         result = self.service.build_bioghist_element(
             agent_name='Agent & Co <test>',
             persistent_id='abc',
-            paragraphs=['<p>Content</p>']
+            paragraphs=['Content']
         )
 
         self.assertIn('Agent &amp; Co &lt;test&gt;', result)
+
+    def test_build_bioghist_element_escapes_paragraph_content(self):
+        """Test that paragraph content with special XML characters is properly escaped."""
+        result = self.service.build_bioghist_element(
+            agent_name='Test Agent',
+            persistent_id='abc',
+            paragraphs=['Content with & ampersand', 'Content with <tags> and "quotes"']
+        )
+
+        self.assertIn('<p>Content with &amp; ampersand</p>', result)
+        self.assertIn('<p>Content with &lt;tags&gt; and "quotes"</p>', result)
 
     def test_validate_eac_cpf_xml_valid(self):
         """Test validating valid EAC-CPF XML."""

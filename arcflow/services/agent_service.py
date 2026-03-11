@@ -101,9 +101,9 @@ class AgentService:
                         )
                         continue
 
-                    # Wrap each line in <p> tags
+                    # Add plain text lines (will be wrapped in <p> tags by build_bioghist_element)
                     for line in lines:
-                        paragraphs.append(f'<p>{line}</p>')
+                        paragraphs.append(line)
 
         # Log if persistent_id is missing
         if not note.get('persistent_id'):

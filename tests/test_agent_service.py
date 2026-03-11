@@ -40,8 +40,8 @@ class TestAgentService(unittest.TestCase):
         self.assertEqual(result['agent_name'], 'Test Agent')
         self.assertEqual(result['persistent_id'], 'abc123')
         self.assertEqual(len(result['paragraphs']), 2)
-        self.assertIn('<p>First paragraph.</p>', result['paragraphs'])
-        self.assertIn('<p>Second paragraph.</p>', result['paragraphs'])
+        self.assertIn('First paragraph.', result['paragraphs'])
+        self.assertIn('Second paragraph.', result['paragraphs'])
 
     def test_get_agent_bioghist_data_no_bioghist(self):
         """Test fetching agent with no bioghist notes."""
@@ -77,8 +77,8 @@ class TestAgentService(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(len(result['paragraphs']), 2)
-        self.assertIn('<p>First item</p>', result['paragraphs'])
-        self.assertIn('<p>Second item</p>', result['paragraphs'])
+        self.assertIn('First item', result['paragraphs'])
+        self.assertIn('Second item', result['paragraphs'])
 
     def test_get_agent_bioghist_data_filters_empty_lines(self):
         """Test that empty lines are filtered out."""
@@ -101,9 +101,9 @@ class TestAgentService(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(len(result['paragraphs']), 3)
-        self.assertIn('<p>Line 1</p>', result['paragraphs'])
-        self.assertIn('<p>Line 2</p>', result['paragraphs'])
-        self.assertIn('<p>Line 3</p>', result['paragraphs'])
+        self.assertIn('Line 1', result['paragraphs'])
+        self.assertIn('Line 2', result['paragraphs'])
+        self.assertIn('Line 3', result['paragraphs'])
 
     def test_get_agent_bioghist_data_missing_persistent_id(self):
         """Test handling bioghist note without persistent_id."""
@@ -217,9 +217,9 @@ class TestAgentService(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(len(result['paragraphs']), 3)
-        self.assertIn('<p>First subnote</p>', result['paragraphs'])
-        self.assertIn('<p>Second subnote</p>', result['paragraphs'])
-        self.assertIn('<p>Third subnote</p>', result['paragraphs'])
+        self.assertIn('First subnote', result['paragraphs'])
+        self.assertIn('Second subnote', result['paragraphs'])
+        self.assertIn('Third subnote', result['paragraphs'])
 
     def test_get_agent_bioghist_data_returns_first_bioghist_only(self):
         """Test that only the first bioghist note is returned."""
@@ -249,8 +249,8 @@ class TestAgentService(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result['persistent_id'], 'first123')
-        self.assertIn('<p>First bioghist</p>', result['paragraphs'])
-        self.assertNotIn('<p>Second bioghist</p>', result['paragraphs'])
+        self.assertIn('First bioghist', result['paragraphs'])
+        self.assertNotIn('Second bioghist', result['paragraphs'])
 
 
 if __name__ == '__main__':
