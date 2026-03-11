@@ -3,7 +3,7 @@ Tests for AgentService.
 """
 
 import unittest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 from arcflow.services.agent_service import AgentService
 
 

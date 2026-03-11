@@ -3,7 +3,7 @@ Tests for XmlTransformService.
 """
 
 import unittest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 from arcflow.services.xml_transform_service import XmlTransformService
 
 # Real ArchivesSpace EAD fixture with namespace
