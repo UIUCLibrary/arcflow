@@ -357,7 +357,7 @@ class XmlTransformService:
         Args:
             agent_name: Name of the agent for the head element
             persistent_id: Persistent ID for the bioghist element (optional)
-            paragraphs: List of paragraph strings (already wrapped in <p> tags as XML strings)
+            paragraphs: List of plain text paragraph strings (will be wrapped in <p> tags with proper escaping)
 
         Returns:
             str: Bioghist XML element as a string
@@ -373,18 +373,11 @@ class XmlTransformService:
         head = ET.SubElement(bioghist, 'head')
         head.text = f'Historical Note from {agent_name} Creator Record'
         
-        # Parse and add paragraph elements
-        # Paragraphs are already XML strings like '<p>content</p>'
-        try:
-            wrapper = ET.fromstring(f'<wrapper>{chr(10).join(paragraphs)}</wrapper>')
-            for p_elem in wrapper:
-                bioghist.append(p_elem)
-        except ET.ParseError as e:
-            # If paragraphs fail to parse, log warning and return minimal bioghist
-            self.log.warning(f'Failed to parse bioghist paragraphs: {e}')
-            # Add a simple text paragraph as fallback
+        # Create <p> elements from plain text paragraphs
+        # ElementTree automatically handles XML escaping
+        for paragraph_text in paragraphs:
             p = ET.SubElement(bioghist, 'p')
-            p.text = '(Content could not be parsed)'
+            p.text = paragraph_text
         
         # Convert to string
         return ET.tostring(bioghist, encoding='unicode', method='xml')
