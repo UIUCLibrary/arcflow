@@ -979,7 +979,14 @@ class ArcFlow:
         self.log.info('Searching for eac_cpf_config.rb...')
 
         # Try 1: Check arclight directory
-        traject_config = os.path.join(self.arclight_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb')
+        result_show = subprocess.run(
+            ['bundle', 'show', 'arcuit'],
+            capture_output=True,
+            text=True,
+            cwd=self.arclight_dir
+        )
+        arcuit_dir = result.stdout.strip()
+        traject_config = os.path.join(arcuit_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb')
         if os.path.exists(traject_config):
            self.log.info(f'✓ Using traject config from arclight: {traject_config}')
            return traject_config
@@ -987,7 +994,7 @@ class ArcFlow:
         # Try 2: Check example file in arcflow root
         arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
         arcflow_repo_root = os.path.dirname(arcflow_package_dir)
-        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf_config.rb')
+        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
 
         if os.path.exists(traject_config):
            self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
