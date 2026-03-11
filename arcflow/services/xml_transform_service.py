@@ -10,7 +10,6 @@ Handles EAD and EAC-CPF XML transformations including:
 
 import re
 from typing import Optional, List
-from xml.sax.saxutils import escape as xml_escape
 from xml.etree import ElementTree as ET
 import logging
 
