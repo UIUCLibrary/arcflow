@@ -358,25 +358,3 @@ class XmlTransformService:
             f'  {paragraphs_xml}\n'
             f'</bioghist>'
         )
-
-    def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str, indent_size: int = 0) -> Optional[ET.Element]:
-        """
-        Parse and validate EAC-CPF XML structure.
-
-        Args:
-            eac_cpf_xml: EAC-CPF XML as a string
-            agent_uri: Agent URI for logging purposes
-            indent_size: Indentation size for logging
-
-        Returns:
-            ElementTree root element if valid, None if parsing fails
-        """
-        indent = ' ' * indent_size
-
-        try:
-            root = ET.fromstring(eac_cpf_xml)
-            self.log.debug(f'{indent}Parsed EAC-CPF XML root element: {root.tag}')
-            return root
-        except ET.ParseError as e:
-            self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
-            return None
