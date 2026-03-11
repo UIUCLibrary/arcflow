@@ -185,12 +185,12 @@ class XmlTransformService:
                         for bioghist_elem in bioghist_elements:
                             existing_bioghist.append(bioghist_elem)
                     else:
-                        # Create new bioghist wrapper and add the elements
-                        new_bioghist = ET.Element(f'{namespace}bioghist')
+                        # No existing bioghist: insert each parsed bioghist element
+                        # directly into archdesc to preserve creator-level wrappers
+                        # and attributes (e.g., id) returned by get_creator_bioghist.
                         for bioghist_elem in bioghist_elements:
-                            for child in bioghist_elem:
-                                new_bioghist.append(child)
-                        archdesc.insert(insert_index, new_bioghist)
+                            archdesc.insert(insert_index, bioghist_elem)
+                            insert_index += 1
                         
                 except ET.ParseError as e:
                     self.log.warning(f'Failed to parse bioghist content: {e}')
