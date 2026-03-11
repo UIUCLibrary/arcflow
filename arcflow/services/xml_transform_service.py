@@ -75,8 +75,9 @@ class XmlTransformService:
                 namespace = root.tag.split('}')[0] + '}'
 
             # Add arcuit namespace declaration to root element if not present
-            if f'{{{arcuit_ns}}}' not in str(ET.tostring(root)):
-                root.attrib[f'{{http://www.w3.org/2000/xmlns/}}arcuit'] = arcuit_ns
+            xmlns_arcuit_key = '{http://www.w3.org/2000/xmlns/}arcuit'
+            if root.attrib.get(xmlns_arcuit_key) is None:
+                root.set(xmlns_arcuit_key, arcuit_ns)
 
             # Find all origination elements with label="Creator"
             creator_idx = 0
