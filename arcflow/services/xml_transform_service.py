@@ -102,6 +102,10 @@ class XmlTransformService:
                         )
 
             # Convert back to string
+            # Note: ElementTree serialization may rewrite namespace prefixes (e.g., default namespaces
+            # may become ns0:) and does not include the XML declaration. If downstream tooling requires
+            # specific namespace prefixes or the <?xml ...?> prolog, consider using lxml or
+            # registering all namespaces before serialization.
             result = ET.tostring(root, encoding='unicode', method='xml')
             return result
 

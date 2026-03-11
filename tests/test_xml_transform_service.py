@@ -211,20 +211,20 @@ class TestXmlTransformService(unittest.TestCase):
   </archdesc>
 </ead>'''
 
-            resource = {
-                'linked_agents': [
-                    {'role': 'creator', 'ref': '/agents/corporate_entities/123'},
-                    {'role': 'creator', 'ref': '/agents/people/456'}
-                ]
-            }
+        resource = {
+            'linked_agents': [
+                {'role': 'creator', 'ref': '/agents/corporate_entities/123'},
+                {'role': 'creator', 'ref': '/agents/people/456'}
+            ]
+        }
 
-            result = self.service.add_creator_ids_to_ead(xml_with_namespace, resource)
+        result = self.service.add_creator_ids_to_ead(xml_with_namespace, resource)
 
-            # Should add both creator IDs
-            self.assertIn('creator_id="creator_corporate_entities_123"', result)
-            self.assertIn('creator_id="creator_people_456"', result)
-            # Should preserve namespace
-            self.assertIn('urn:isbn:1-931666-22-9', result)
+        # Should add both creator IDs
+        self.assertIn('creator_id="creator_corporate_entities_123"', result)
+        self.assertIn('creator_id="creator_people_456"', result)
+        # Should preserve namespace
+        self.assertIn('urn:isbn:1-931666-22-9', result)
 
     def test_add_collection_links_idempotent(self):
         """Test that adding collection links is idempotent."""

@@ -76,7 +76,7 @@ class AgentService:
             indent_size: Indentation size for logging
 
         Returns:
-            List of paragraph strings wrapped in <p> tags
+            List of plain text paragraph strings (not wrapped in <p> tags)
         """
         indent = ' ' * indent_size
         paragraphs = []
