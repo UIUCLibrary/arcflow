@@ -979,12 +979,13 @@ class ArcFlow:
         self.log.info('Searching for eac_cpf_config.rb...')
 
         # Try 1: Check arclight directory
-        arcuit_dir = subprocess.run(
+        result_show = subprocess.run(
             ['bundle', 'show', 'arcuit'],
             capture_output=True,
             text=True,
             cwd=self.arclight_dir
         )
+        arcuit_dir = result.stdout.strip()
         traject_config = os.path.join(arcuit_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb')
         if os.path.exists(traject_config):
            self.log.info(f'✓ Using traject config from arclight: {traject_config}')
