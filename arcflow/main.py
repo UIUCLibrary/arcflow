@@ -816,6 +816,11 @@ class ArcFlow:
 
             eac_cpf_xml = response.text
 
+            # Validate EAC-CPF XML structure
+            if not self.xml_transform.validate_eac_cpf_xml(eac_cpf_xml, agent_uri, indent_size=indent_size):
+                self.log.error(f'{indent}Invalid EAC-CPF XML for {agent_uri}, skipping')
+                return None
+
             # Add collection ead_ids to resourceRelation creatorOf elements
             eac_cpf_xml = self.xml_transform.add_collection_links_to_eac_cpf(eac_cpf_xml, indent_size=indent_size)
 
