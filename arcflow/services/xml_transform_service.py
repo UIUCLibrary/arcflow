@@ -70,6 +70,9 @@ class XmlTransformService:
 
             # Parse the XML
             root = ET.fromstring(ead)
+            namespace = ''
+            if root.tag.startswith('{'):
+                namespace = root.tag.split('}')[0] + '}'
 
             # Add arcuit namespace declaration to root element if not present
             if f'{{{arcuit_ns}}}' not in str(ET.tostring(root)):
@@ -77,14 +80,14 @@ class XmlTransformService:
 
             # Find all origination elements with label="Creator"
             creator_idx = 0
-            for origination in root.iter('origination'):
+            for origination in root.iter(f'{namespace}origination'):
                 if origination.get('label') == 'Creator' and creator_idx < len(creator_ids):
                     creator_id = creator_ids[creator_idx]
 
                     # Find the first name element (corpname, persname, or famname)
                     name_elem = None
                     for tag in ['corpname', 'persname', 'famname']:
-                        name_elem = origination.find(tag)
+                        name_elem = origination.find(f'{namespace}{tag}')
                         if name_elem is not None:
                             break
 
@@ -132,9 +135,14 @@ class XmlTransformService:
         try:
             # Parse the XML
             root = ET.fromstring(ead)
+
+            # Get the namespace, if any
+            namespace = ''
+            if root.tag.startswith('{'):
+                namespace = root.tag.split('}')[0] + '}'
             
             archdesc = None
-            for elem in root.iter('archdesc'):
+            for elem in root.iter(f'{namespace}archdesc'):
                 if elem.get('level') == 'collection':
                     archdesc = elem
                     break
@@ -142,7 +150,7 @@ class XmlTransformService:
             if archdesc is None:
                 return ead
             
-            did = archdesc.find('did')
+            did = archdesc.find(f'{namespace}did')
             if did is None:
                 return ead
             
@@ -178,7 +186,7 @@ class XmlTransformService:
                             existing_bioghist.append(bioghist_elem)
                     else:
                         # Create new bioghist wrapper and add the elements
-                        new_bioghist = ET.Element('bioghist')
+                        new_bioghist = ET.Element(f'{namespace}bioghist')
                         for bioghist_elem in bioghist_elements:
                             for child in bioghist_elem:
                                 new_bioghist.append(child)

@@ -6,6 +6,37 @@ import unittest
 from unittest.mock import Mock, MagicMock
 from arcflow.services.xml_transform_service import XmlTransformService
 
+# Real ArchivesSpace EAD fixture with namespace
+REAL_EAD_WITH_NAMESPACE = '''<?xml version="1.0" encoding="UTF-8"?>
+<ead xmlns="urn:isbn:1-931666-22-9" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <eadheader>
+    <eadid>test-collection</eadid>
+  </eadheader>
+  <archdesc level="collection">
+    <did>
+      <unittitle>Test Collection with Namespace</unittitle>
+      <origination label="Creator">
+        <corpname source="lcnaf">Test Corporation</corpname>
+      </origination>
+    </did>
+  </archdesc>
+</ead>'''
+
+# Real EAC-CPF fixture with namespace
+REAL_EAC_CPF_WITH_NAMESPACE = '''<?xml version="1.0" encoding="UTF-8"?>
+<eac-cpf xmlns="urn:isbn:1-931666-33-4" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <control>
+    <recordId>test-agent</recordId>
+  </control>
+  <cpfDescription>
+    <relations>
+      <resourceRelation resourceRelationType="creatorOf" 
+                       xlink:href="https://aspace.test/repositories/2/resources/123">
+        <relationEntry>Test Collection</relationEntry>
+      </resourceRelation>
+    </relations>
+  </cpfDescription>
+</eac-cpf>'''
 
 class TestXmlTransformService(unittest.TestCase):
     """Test cases for XmlTransformService."""
@@ -18,11 +49,6 @@ class TestXmlTransformService(unittest.TestCase):
 
     def test_add_creator_ids_to_ead(self):
         """Test adding arcuit:creator_id attributes to origination elements."""
-        ead = '''<ead>
-        <origination label="Creator">
-          <corpname source="lcnaf">Test Corporation</corpname>
-        </origination>
-        </ead>'''
 
         resource = {
             'linked_agents': [
@@ -30,13 +56,16 @@ class TestXmlTransformService(unittest.TestCase):
             ]
         }
 
-        result = self.service.add_creator_ids_to_ead(ead, resource)
+        result = self.service.add_creator_ids_to_origination(REAL_EAD_WITH_NAMESPACE, resource)
 
-        # Should contain namespace declaration
+        # Should contain arcuit namespace declaration
         self.assertIn('xmlns:arcuit', result)
         self.assertIn('https://arcuit.library.illinois.edu/ead-extensions', result)
         # Should contain the creator_id attribute
         self.assertIn('creator_id="creator_corporate_entities_123"', result)
+        # Should preserve EAD namespace
+        self.assertIn('xmlns="urn:isbn:1-931666-22-9"', result)
+        # Should still find and modify the corpname element
         self.assertIn('<corpname', result)
 
     def test_add_creator_ids_multiple_creators(self):
@@ -73,13 +102,14 @@ class TestXmlTransformService(unittest.TestCase):
 
     def test_inject_collection_metadata_with_all_fields(self):
         """Test injecting record group, subgroup, and bioghist."""
-        xml_content = '''<ead>
-<archdesc level="collection">
-  <did>
-    <unittitle>Test Collection</unittitle>
-  </did>
-</archdesc>
-</ead>'''
+        xml_content = '''<?xml version="1.0" encoding="UTF-8"?>
+        <ead xmlns="urn:isbn:1-931666-22-9">
+          <archdesc level="collection">
+            <did>
+              <unittitle>Test Collection</unittitle>
+            </did>
+          </archdesc>
+        </ead>'''
 
         result = self.service.inject_collection_metadata(
             xml_content,
@@ -88,9 +118,15 @@ class TestXmlTransformService(unittest.TestCase):
             bioghist_content='<bioghist><p>Test bioghist</p></bioghist>'
         )
 
+        # Should add recordgroup (no namespace)
         self.assertIn('<recordgroup>RG 1 — Test Group</recordgroup>', result)
+        # Should add subgroup (no namespace)
         self.assertIn('<subgroup>SG 1.1 — Test Subgroup</subgroup>', result)
-        self.assertIn('<bioghist><p>Test bioghist</p></bioghist>', result)
+        # Should add bioghist with EAD namespace
+        self.assertIn('bioghist', result)
+        self.assertIn('Test bioghist', result)
+        # Should preserve original namespace
+        self.assertIn('xmlns="urn:isbn:1-931666-22-9"', result)
 
     def test_inject_collection_metadata_into_existing_bioghist(self):
         """Test that bioghist content is inserted into existing bioghist element."""
@@ -140,11 +176,6 @@ class TestXmlTransformService(unittest.TestCase):
 
     def test_add_collection_links_to_eac_cpf(self):
         """Test adding ead_id descriptiveNote to resourceRelation elements."""
-        eac_cpf_xml = '''<eac-cpf>
-<resourceRelation resourceRelationType="creatorOf" xlink:href="https://aspace.test/repositories/2/resources/123">
-  <relationEntry>Test Collection</relationEntry>
-</resourceRelation>
-</eac-cpf>'''
 
         # Mock the client response
         mock_response = Mock()
@@ -152,12 +183,45 @@ class TestXmlTransformService(unittest.TestCase):
         mock_response.json.return_value = {'ead_id': 'TEST.1.2.3'}
         self.mock_client.get.return_value = mock_response
 
-        result = self.service.add_collection_links_to_eac_cpf(eac_cpf_xml)
+        result = self.service.add_collection_links_to_eac_cpf(REAL_EAC_CPF_WITH_NAMESPACE)
 
+        # Should add descriptiveNote
         self.assertIn('<descriptiveNote>', result)
         self.assertIn('<p>ead_id:TEST.1.2.3</p>', result)
         self.assertIn('</descriptiveNote>', result)
+        # Should preserve EAC-CPF namespace
+        self.assertIn('xmlns="urn:isbn:1-931666-33-4"', result)
 
+    def test_multiple_creators_with_namespace(self):
+            """Test handling multiple creators when EAD has default namespace."""
+            xml_with_namespace = '''<?xml version="1.0" encoding="UTF-8"?>
+                                        <ead xmlns="urn:isbn:1-931666-22-9">
+                                          <archdesc level="collection">
+                                            <did>
+                                              <origination label="Creator">
+                                                <corpname source="lcnaf">First Corp</corpname>
+                                              </origination>
+                                              <origination label="Creator">
+                                                <persname source="lcnaf">Second Person</persname>
+                                              </origination>
+                                            </did>
+                                          </archdesc>
+                                        </ead>'''
+
+            resource = {
+                'linked_agents': [
+                    {'role': 'creator', 'ref': '/agents/corporate_entities/123'},
+                    {'role': 'creator', 'ref': '/agents/people/456'}
+                ]
+            }
+
+            result = self.service.add_creator_ids_to_origination(xml_with_namespace, resource)
+
+            # Should add both creator IDs
+            self.assertIn('creator_id="creator_corporate_entities_123"', result)
+            self.assertIn('creator_id="creator_people_456"', result)
+            # Should preserve namespace
+            self.assertIn('xmlns="urn:isbn:1-931666-22-9"', result)
     def test_add_collection_links_idempotent(self):
         """Test that adding collection links is idempotent."""
         eac_cpf_xml = '''<eac-cpf>
