@@ -271,7 +271,7 @@ class ArcFlow:
 
                 # Add authfilenumber attributes to origination name elements
                 # (links creator names in EAD to their Solr creator records)
-                xml_content = self.xml_transform.add_creator_ids_to_origination(xml_content, resource, indent_size=indent_size)
+                xml_content = self.xml_transform.add_creator_ids_to_ead(xml_content, resource, indent_size=indent_size)
 
                 # Get record group and subgroup labels
                 rg_label, sg_label = extract_labels(resource)[1:3]
