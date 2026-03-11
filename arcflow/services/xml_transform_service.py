@@ -158,13 +158,13 @@ class XmlTransformService:
             insert_index = did_index + 1
             
             if record_group:
-                recordgroup = ET.Element('recordgroup')
+                recordgroup = ET.Element(f'{namespace}recordgroup')
                 recordgroup.text = record_group
                 archdesc.insert(insert_index, recordgroup)
                 insert_index += 1
                 
                 if subgroup:
-                    subgroup_elem = ET.Element('subgroup')
+                    subgroup_elem = ET.Element(f'{namespace}subgroup')
                     subgroup_elem.text = subgroup
                     archdesc.insert(insert_index, subgroup_elem)
                     insert_index += 1
@@ -172,7 +172,7 @@ class XmlTransformService:
             if bioghist_content:
                 existing_bioghist = None
                 for elem in archdesc:
-                    if elem.tag == 'bioghist':
+                    if elem.tag == f'{namespace}bioghist':
                         existing_bioghist = elem
                         break
                 
@@ -189,6 +189,13 @@ class XmlTransformService:
                         # directly into archdesc to preserve creator-level wrappers
                         # and attributes (e.g., id) returned by get_creator_bioghist.
                         for bioghist_elem in bioghist_elements:
+                            # If there's a namespace, update the bioghist tag to include it
+                            if namespace and not bioghist_elem.tag.startswith('{'):
+                                bioghist_elem.tag = f'{namespace}{bioghist_elem.tag}'
+                                # Also update child element tags
+                                for child in bioghist_elem.iter():
+                                    if not child.tag.startswith('{'):
+                                        child.tag = f'{namespace}{child.tag}'
                             archdesc.insert(insert_index, bioghist_elem)
                             insert_index += 1
                         
@@ -241,18 +248,23 @@ class XmlTransformService:
                     eac_cpf_xml = eac_cpf_xml.replace('<eac-cpf>', '<eac-cpf xmlns:xlink="http://www.w3.org/1999/xlink">', 1)
                 root = ET.fromstring(eac_cpf_xml)
             
+            # Detect EAC-CPF namespace
+            namespace = ''
+            if root.tag.startswith('{'):
+                namespace = root.tag.split('}')[0] + '}'
+            
             # Track if any changes were made
             changes_made = False
             
             # Find all resourceRelation elements with resourceRelationType="creatorOf"
-            for resource_relation in root.iter('resourceRelation'):
+            for resource_relation in root.iter(f'{namespace}resourceRelation'):
                 if resource_relation.get('resourceRelationType') != 'creatorOf':
                     continue
                 
                 # Check if descriptiveNote with ead_id pattern already exists
                 has_ead_id_note = False
-                for desc_note in resource_relation.findall('descriptiveNote'):
-                    for p in desc_note.findall('p'):
+                for desc_note in resource_relation.findall(f'{namespace}descriptiveNote'):
+                    for p in desc_note.findall(f'{namespace}p'):
                         if p.text and p.text.startswith('ead_id:'):
                             has_ead_id_note = True
                             break
@@ -301,9 +313,9 @@ class XmlTransformService:
                             'has no ead_id. Skipping collection link.')
                         continue
                     
-                    # Create descriptiveNote element with ead_id
-                    descriptive_note = ET.Element('descriptiveNote')
-                    p = ET.SubElement(descriptive_note, 'p')
+                    # Create descriptiveNote element with ead_id (namespace-aware)
+                    descriptive_note = ET.Element(f'{namespace}descriptiveNote')
+                    p = ET.SubElement(descriptive_note, f'{namespace}p')
                     p.text = f'ead_id:{ead_id}'
                     
                     # Append to resourceRelation
@@ -333,28 +345,70 @@ class XmlTransformService:
         paragraphs: List[str]
     ) -> str:
         """
-        Build bioghist XML element from structured data.
+        Build bioghist XML element from structured data using ElementTree for proper escaping.
 
         Args:
             agent_name: Name of the agent for the head element
             persistent_id: Persistent ID for the bioghist element (optional)
-            paragraphs: List of paragraph strings (already wrapped in <p> tags)
+            paragraphs: List of paragraph strings (already wrapped in <p> tags as XML strings)
 
         Returns:
             str: Bioghist XML element as a string
         """
-        paragraphs_xml = '\n'.join(paragraphs)
-        heading = f'Historical Note from {xml_escape(agent_name)} Creator Record'
-
-        # Only include id attribute if persistent_id is available
+        # Create bioghist element
+        bioghist = ET.Element('bioghist')
+        
+        # Add id attribute if persistent_id is available
         if persistent_id:
-            id_attr = f' id="aspace_{persistent_id}"'
-        else:
-            id_attr = ''
+            bioghist.set('id', f'aspace_{persistent_id}')
+        
+        # Create head element with escaped text
+        head = ET.SubElement(bioghist, 'head')
+        head.text = f'Historical Note from {agent_name} Creator Record'
+        
+        # Parse and add paragraph elements
+        # Paragraphs are already XML strings like '<p>content</p>'
+        try:
+            wrapper = ET.fromstring(f'<wrapper>{chr(10).join(paragraphs)}</wrapper>')
+            for p_elem in wrapper:
+                bioghist.append(p_elem)
+        except ET.ParseError as e:
+            # If paragraphs fail to parse, log warning and return minimal bioghist
+            self.log.warning(f'Failed to parse bioghist paragraphs: {e}')
+            # Add a simple text paragraph as fallback
+            p = ET.SubElement(bioghist, 'p')
+            p.text = '(Content could not be parsed)'
+        
+        # Convert to string
+        return ET.tostring(bioghist, encoding='unicode', method='xml')
 
-        return (
-            f'<bioghist{id_attr}>\n'
-            f'  <head>{heading}</head>\n'
-            f'  {paragraphs_xml}\n'
-            f'</bioghist>'
-        )
+    def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str, indent_size: int = 0) -> Optional[ET.Element]:
+        """
+        Parse and validate EAC-CPF XML structure.
+
+        Args:
+            eac_cpf_xml: EAC-CPF XML as a string
+            agent_uri: Agent URI for logging purposes
+            indent_size: Indentation size for logging
+
+        Returns:
+            ElementTree root element if valid, None if parsing fails
+        """
+        indent = ' ' * indent_size
+
+        try:
+            # Try to parse, with fallback for missing xlink namespace
+            try:
+                root = ET.fromstring(eac_cpf_xml)
+            except ET.ParseError:
+                # If parsing fails, it might be due to undeclared namespaces
+                if 'xlink:' in eac_cpf_xml and 'xmlns:xlink' not in eac_cpf_xml:
+                    # Add xlink namespace declaration to root element
+                    eac_cpf_xml = eac_cpf_xml.replace('<eac-cpf>', '<eac-cpf xmlns:xlink="http://www.w3.org/1999/xlink">', 1)
+                root = ET.fromstring(eac_cpf_xml)
+            
+            self.log.debug(f'{indent}Parsed EAC-CPF XML root element: {root.tag}')
+            return root
+        except ET.ParseError as e:
+            self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
+            return None
