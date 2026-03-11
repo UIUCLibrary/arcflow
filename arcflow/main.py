@@ -987,7 +987,7 @@ class ArcFlow:
         # Try 2: Check example file in arcflow root
         arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
         arcflow_repo_root = os.path.dirname(arcflow_package_dir)
-        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf_config.rb')
+        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
 
         if os.path.exists(traject_config):
            self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
