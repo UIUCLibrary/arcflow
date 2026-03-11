@@ -269,8 +269,8 @@ class ArcFlow:
             if xml.content:
                 xml_content = xml.content.decode('utf-8')
 
-                # Add authfilenumber attributes to origination name elements
-                # (links creator names in EAD to their Solr creator records)
+                # Add arcuit:creator_id attributes (in a custom namespace) to origination name elements
+                # (links creator names in EAD to their corresponding creator records, e.g., in Solr)
                 xml_content = self.xml_transform.add_creator_ids_to_ead(xml_content, resource, indent_size=indent_size)
 
                 # Get record group and subgroup labels
