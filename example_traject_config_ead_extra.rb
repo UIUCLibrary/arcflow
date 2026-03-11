@@ -19,7 +19,7 @@
 # Arcflow adds arcuit:creator_id attributes to origination name elements
 # using a custom namespace to avoid collisions with existing authfilenumber values:
 #   <ead xmlns="urn:isbn:1-931666-22-9"
-#        xmlns:arcuit="https://www.library.illinois.edu/arcuit">
+#        xmlns:arcuit="https://arcuit.library.illinois.edu/ead-extensions">
 #     <origination label="Creator">
 #       <corpname source="lcnaf"
 #                 authfilenumber="n79043912"
@@ -33,12 +33,12 @@
 
 # Creator ArcLight IDs - extracted from arcuit:creator_id attributes on origination
 # name elements (<corpname>, <persname>, <famname>) injected by arcflow.
-# Uses custom namespace xmlns:arcuit="https://www.library.illinois.edu/arcuit"
+# Uses custom namespace xmlns:arcuit="https://arcuit.library.illinois.edu/ead-extensions"
 # Indexed as an array of creator IDs (e.g., ["creator_corporate_entities_123"])
 # for bidirectional creator↔collection linking in Solr.
 to_field 'creator_arclight_ids_ssim' do |record, accumulator|
   # Define namespace
-  arcuit_ns = {'arcuit' => 'https://www.library.illinois.edu/arcuit',
+  arcuit_ns = {'arcuit' => 'https://arcuit.library.illinois.edu/ead-extensions',
                'ead' => 'urn:isbn:1-931666-22-9'}
 
   # Extract arcuit:creator_id from origination name elements
