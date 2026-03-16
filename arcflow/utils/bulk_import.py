@@ -242,13 +242,14 @@ def retrieve_job_output(path, report_list, asnake_client):
     total_count = len(report_list)
     count = 0
     for row in report_list:
+        count += 1
         if "results_id" not in row:
+            print(f"No job output to retrive for {ead_id} ({identifier}), finding aid csv {count} out of {total_count}")
             continue
         repo_id = row["repo_id"]
         job_id = row["results_id"]
         identifier = row["identifier"]
         ead_id = row["ead_id"]
-        count += 1
         print(f"Retrieving job output for {ead_id} ({identifier}), finding aid csv {count} out of {total_count}")
         if not check_job_status(asnake_client, repo_id, job_id):
             print(f"Error downloading files for job {job_id}")
