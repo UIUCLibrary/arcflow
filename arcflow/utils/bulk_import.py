@@ -185,7 +185,10 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false', s
         print(json.dumps(import_job, indent=4))
     
     if save_output_files:
-        retrieve_job_output(csv_directory, bulk_import_report, client)
+        try:
+            retrieve_job_output(csv_directory, bulk_import_report, client)
+        except Exception as e:
+            print(f"Error while retrieving job ouput: {e}")
     
     return bulk_import_report
 
