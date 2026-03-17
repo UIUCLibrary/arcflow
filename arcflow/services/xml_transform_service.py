@@ -412,7 +412,7 @@ class XmlTransformService:
         # Convert to string (no XML declaration for fragments)
         return etree.tostring(bioghist, encoding='unicode', method='xml')
 
-    def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str, indent_size: int = 0) -> Optional[etree._Element]:
+    def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str, indent_size: int = 0) -> Optional['etree._Element']:
         """
         Parse and validate EAC-CPF XML structure.
 
