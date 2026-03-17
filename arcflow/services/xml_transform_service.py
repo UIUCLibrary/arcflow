@@ -10,7 +10,7 @@ Handles EAD and EAC-CPF XML transformations including:
 
 import re
 from typing import Optional, List
-from xml.etree import ElementTree as ET
+from lxml import etree
 import logging
 
 
@@ -65,18 +65,25 @@ class XmlTransformService:
         try:
             # Define the Arcuit namespace
             arcuit_ns = "https://arcuit.library.illinois.edu/ead-extensions"
-            ET.register_namespace('arcuit', arcuit_ns)
 
-            # Parse the XML
-            root = ET.fromstring(ead)
+            # Parse the XML with lxml
+            parser = etree.XMLParser(remove_blank_text=False)
+            root = etree.fromstring(ead.encode('utf-8'), parser)
             namespace = ''
             if root.tag.startswith('{'):
                 namespace = root.tag.split('}')[0] + '}'
 
             # Add arcuit namespace declaration to root element if not present
-            xmlns_arcuit_key = '{http://www.w3.org/2000/xmlns/}arcuit'
-            if root.attrib.get(xmlns_arcuit_key) is None:
-                root.set(xmlns_arcuit_key, arcuit_ns)
+            nsmap = root.nsmap.copy() if root.nsmap else {}
+            if 'arcuit' not in nsmap:
+                nsmap['arcuit'] = arcuit_ns
+                # Create a new root element with updated namespace map
+                new_root = etree.Element(root.tag, nsmap=nsmap, attrib=root.attrib)
+                new_root.text = root.text
+                new_root.tail = root.tail
+                for child in root:
+                    new_root.append(child)
+                root = new_root
 
             # Find all origination elements with label="Creator"
             creator_idx = 0
@@ -101,15 +108,19 @@ class XmlTransformService:
                             f'{indent}No eligible name element in <origination> for creator ID {creator_id}'
                         )
 
-            # Convert back to string
-            # Note: ElementTree serialization may rewrite namespace prefixes (e.g., default namespaces
-            # may become ns0:) and does not include the XML declaration. If downstream tooling requires
-            # specific namespace prefixes or the <?xml ...?> prolog, consider using lxml or
-            # registering all namespaces before serialization.
-            result = ET.tostring(root, encoding='unicode', method='xml')
+            # Convert back to string with lxml, preserving XML declaration and namespaces
+            # Serialize to bytes first (which allows xml_declaration), then decode
+            result_bytes = etree.tostring(
+                root, 
+                encoding='UTF-8', 
+                method='xml',
+                pretty_print=False,
+                xml_declaration=True
+            )
+            result = result_bytes.decode('utf-8')
             return result
 
-        except ET.ParseError as e:
+        except etree.ParseError as e:
             self.log.error(f'{indent}Failed to parse EAD XML: {e}. Returning original content.')
             return ead
 
@@ -137,8 +148,9 @@ class XmlTransformService:
             str: Modified EAD XML string
         """
         try:
-            # Parse the XML
-            root = ET.fromstring(ead)
+            # Parse the XML with lxml
+            parser = etree.XMLParser(remove_blank_text=False)
+            root = etree.fromstring(ead.encode('utf-8'), parser)
 
             # Get the namespace, if any
             namespace = ''
@@ -162,13 +174,13 @@ class XmlTransformService:
             insert_index = did_index + 1
             
             if record_group:
-                recordgroup = ET.Element(f'{namespace}recordgroup')
+                recordgroup = etree.Element(f'{namespace}recordgroup')
                 recordgroup.text = record_group
                 archdesc.insert(insert_index, recordgroup)
                 insert_index += 1
                 
                 if subgroup:
-                    subgroup_elem = ET.Element(f'{namespace}subgroup')
+                    subgroup_elem = etree.Element(f'{namespace}subgroup')
                     subgroup_elem.text = subgroup
                     archdesc.insert(insert_index, subgroup_elem)
                     insert_index += 1
@@ -182,7 +194,7 @@ class XmlTransformService:
                 
                 try:
                     # Wrap in a temporary root to handle multiple bioghist elements
-                    bioghist_wrapper = ET.fromstring(f'<wrapper>{bioghist_content}</wrapper>')
+                    bioghist_wrapper = etree.fromstring(f'<wrapper>{bioghist_content}</wrapper>'.encode('utf-8'))
                     bioghist_elements = list(bioghist_wrapper)
 
                     def _qualify_namespace(elem):
@@ -209,13 +221,20 @@ class XmlTransformService:
                             archdesc.insert(insert_index, bioghist_elem)
                             insert_index += 1
                         
-                except ET.ParseError as e:
+                except etree.ParseError as e:
                     self.log.warning(f'Failed to parse bioghist content: {e}')
             
-            result = ET.tostring(root, encoding='unicode', method='xml')
+            result_bytes = etree.tostring(
+                root,
+                encoding='UTF-8',
+                method='xml',
+                pretty_print=False,
+                xml_declaration=True
+            )
+            result = result_bytes.decode('utf-8')
             return result
             
-        except ET.ParseError as e:
+        except etree.ParseError as e:
             self.log.error(f'Failed to parse EAD XML: {e}. Returning original content.')
             return ead
 
@@ -247,16 +266,17 @@ class XmlTransformService:
         original_xml = eac_cpf_xml
 
         try:
-            # Parse the XML, handling potential namespace issues
+            # Parse the XML with lxml, handling potential namespace issues
+            parser = etree.XMLParser(remove_blank_text=False)
             try:
-                root = ET.fromstring(eac_cpf_xml)
-            except ET.ParseError:
+                root = etree.fromstring(eac_cpf_xml.encode('utf-8'), parser)
+            except etree.ParseError:
                 # If parsing fails, it might be due to undeclared namespaces
                 # Try to fix by adding namespace declarations
                 if 'xlink:' in eac_cpf_xml and 'xmlns:xlink' not in eac_cpf_xml:
                     # Add xlink namespace declaration to root element
                     eac_cpf_xml = eac_cpf_xml.replace('<eac-cpf>', '<eac-cpf xmlns:xlink="http://www.w3.org/1999/xlink">', 1)
-                root = ET.fromstring(eac_cpf_xml)
+                root = etree.fromstring(eac_cpf_xml.encode('utf-8'), parser)
             
             # Detect EAC-CPF namespace
             namespace = ''
@@ -324,8 +344,8 @@ class XmlTransformService:
                         continue
                     
                     # Create descriptiveNote element with ead_id (namespace-aware)
-                    descriptive_note = ET.Element(f'{namespace}descriptiveNote')
-                    p = ET.SubElement(descriptive_note, f'{namespace}p')
+                    descriptive_note = etree.Element(f'{namespace}descriptiveNote')
+                    p = etree.SubElement(descriptive_note, f'{namespace}p')
                     p.text = f'ead_id:{ead_id}'
                     
                     # Append to resourceRelation
@@ -338,13 +358,20 @@ class XmlTransformService:
             
             # Only convert back to string if changes were made
             if changes_made:
-                result = ET.tostring(root, encoding='unicode', method='xml')
+                result_bytes = etree.tostring(
+                    root,
+                    encoding='UTF-8',
+                    method='xml',
+                    pretty_print=False,
+                    xml_declaration=True
+                )
+                result = result_bytes.decode('utf-8')
                 return result
             else:
                 # Return original XML (not the potentially modified version with namespace)
                 return original_xml
             
-        except ET.ParseError as e:
+        except etree.ParseError as e:
             self.log.error(f'{indent}Failed to parse EAC-CPF XML: {e}. Returning original content.')
             return original_xml
 
@@ -355,7 +382,7 @@ class XmlTransformService:
         paragraphs: List[str]
     ) -> str:
         """
-        Build bioghist XML element from structured data using ElementTree for proper escaping.
+        Build bioghist XML element from structured data using lxml for proper escaping.
 
         Args:
             agent_name: Name of the agent for the head element
@@ -366,26 +393,26 @@ class XmlTransformService:
             str: Bioghist XML element as a string
         """
         # Create bioghist element
-        bioghist = ET.Element('bioghist')
+        bioghist = etree.Element('bioghist')
         
         # Add id attribute if persistent_id is available
         if persistent_id:
             bioghist.set('id', f'aspace_{persistent_id}')
         
         # Create head element with escaped text
-        head = ET.SubElement(bioghist, 'head')
+        head = etree.SubElement(bioghist, 'head')
         head.text = f'Historical Note from {agent_name} Creator Record'
         
         # Create <p> elements from plain text paragraphs
-        # ElementTree automatically handles XML escaping
+        # lxml automatically handles XML escaping
         for paragraph_text in paragraphs:
-            p = ET.SubElement(bioghist, 'p')
+            p = etree.SubElement(bioghist, 'p')
             p.text = paragraph_text
         
-        # Convert to string
-        return ET.tostring(bioghist, encoding='unicode', method='xml')
+        # Convert to string (no XML declaration for fragments)
+        return etree.tostring(bioghist, encoding='unicode', method='xml')
 
-    def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str, indent_size: int = 0) -> Optional[ET.Element]:
+    def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str, indent_size: int = 0) -> Optional[etree._Element]:
         """
         Parse and validate EAC-CPF XML structure.
 
@@ -395,23 +422,24 @@ class XmlTransformService:
             indent_size: Indentation size for logging
 
         Returns:
-            ElementTree root element if valid, None if parsing fails
+            lxml Element if valid, None if parsing fails
         """
         indent = ' ' * indent_size
 
         try:
-            # Try to parse, with fallback for missing xlink namespace
+            # Try to parse with lxml, with fallback for missing xlink namespace
+            parser = etree.XMLParser(remove_blank_text=False)
             try:
-                root = ET.fromstring(eac_cpf_xml)
-            except ET.ParseError:
+                root = etree.fromstring(eac_cpf_xml.encode('utf-8'), parser)
+            except etree.ParseError:
                 # If parsing fails, it might be due to undeclared namespaces
                 if 'xlink:' in eac_cpf_xml and 'xmlns:xlink' not in eac_cpf_xml:
                     # Add xlink namespace declaration to root element
                     eac_cpf_xml = eac_cpf_xml.replace('<eac-cpf>', '<eac-cpf xmlns:xlink="http://www.w3.org/1999/xlink">', 1)
-                root = ET.fromstring(eac_cpf_xml)
+                root = etree.fromstring(eac_cpf_xml.encode('utf-8'), parser)
             
             self.log.debug(f'{indent}Parsed EAC-CPF XML root element: {root.tag}')
             return root
-        except ET.ParseError as e:
+        except etree.ParseError as e:
             self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
             return None

@@ -353,6 +353,154 @@ class TestXmlTransformService(unittest.TestCase):
 
         self.assertIn('Client is required', str(context.exception))
 
+    def test_namespace_preservation_ead_with_declaration(self):
+        """Test that EAD namespace prefixes and XML declaration are preserved."""
+        xml_input = '''<?xml version="1.0" encoding="UTF-8"?>
+<ead xmlns="urn:isbn:1-931666-22-9" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <eadheader>
+    <eadid>test-collection</eadid>
+  </eadheader>
+  <archdesc level="collection">
+    <did>
+      <unittitle>Test Collection</unittitle>
+      <origination label="Creator">
+        <corpname source="lcnaf">Test Corporation</corpname>
+      </origination>
+    </did>
+  </archdesc>
+</ead>'''
+        
+        resource = {
+            'linked_agents': [
+                {'role': 'creator', 'ref': '/agents/corporate_entities/123'}
+            ]
+        }
+        
+        result = self.service.add_creator_ids_to_ead(xml_input, resource)
+        
+        # Should have XML declaration
+        self.assertTrue(result.startswith('<?xml'), 'XML declaration should be preserved')
+        self.assertIn('version', result[:50])  # Check in first 50 chars
+        self.assertIn('1.0', result[:50])
+        self.assertIn('encoding', result[:50])
+        self.assertIn('UTF-8', result[:50])
+        
+        # Should preserve default EAD namespace (not rewrite to ns0:)
+        self.assertIn('xmlns="urn:isbn:1-931666-22-9"', result)
+        self.assertNotIn('ns0:', result, 'Default namespace should not be rewritten to ns0:')
+        
+        # Should preserve xlink namespace
+        self.assertIn('xmlns:xlink="http://www.w3.org/1999/xlink"', result)
+        
+        # Should add arcuit namespace
+        self.assertIn('xmlns:arcuit="https://arcuit.library.illinois.edu/ead-extensions"', result)
+        
+        # Tags should use default namespace, not prefixed
+        self.assertIn('<ead ', result)
+        self.assertIn('<archdesc ', result)
+        self.assertNotIn('<ns0:ead', result)
+
+    def test_namespace_preservation_eac_cpf_with_declaration(self):
+        """Test that EAC-CPF namespace prefixes and XML declaration are preserved."""
+        xml_input = '''<?xml version="1.0" encoding="UTF-8"?>
+<eac-cpf xmlns="urn:isbn:1-931666-33-4" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <control>
+    <recordId>test-agent</recordId>
+  </control>
+  <cpfDescription>
+    <relations>
+      <resourceRelation resourceRelationType="creatorOf" 
+                       xlink:href="https://aspace.test/repositories/2/resources/123">
+        <relationEntry>Test Collection</relationEntry>
+      </resourceRelation>
+    </relations>
+  </cpfDescription>
+</eac-cpf>'''
+        
+        # Mock the client response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'ead_id': 'TEST.1.2.3'}
+        self.mock_client.get.return_value = mock_response
+        
+        result = self.service.add_collection_links_to_eac_cpf(xml_input)
+        
+        # Should have XML declaration
+        self.assertTrue(result.startswith('<?xml'), 'XML declaration should be preserved')
+        self.assertIn('version', result[:50])  # Check in first 50 chars
+        self.assertIn('1.0', result[:50])
+        self.assertIn('encoding', result[:50])
+        self.assertIn('UTF-8', result[:50])
+        
+        # Should preserve default EAC-CPF namespace (not rewrite to ns0:)
+        self.assertIn('xmlns="urn:isbn:1-931666-33-4"', result)
+        self.assertNotIn('ns0:', result, 'Default namespace should not be rewritten to ns0:')
+        
+        # Should preserve xlink namespace
+        self.assertIn('xmlns:xlink="http://www.w3.org/1999/xlink"', result)
+        
+        # Tags should use default namespace, not prefixed
+        self.assertIn('<eac-cpf ', result)
+        self.assertIn('<resourceRelation ', result)
+        self.assertNotIn('<ns0:eac-cpf', result)
+
+    def test_namespace_preservation_inject_metadata(self):
+        """Test that inject_collection_metadata preserves namespaces."""
+        xml_input = '''<?xml version="1.0" encoding="UTF-8"?>
+<ead xmlns="urn:isbn:1-931666-22-9">
+  <eadheader>
+    <eadid>test-collection</eadid>
+  </eadheader>
+  <archdesc level="collection">
+    <did>
+      <unittitle>Test Collection</unittitle>
+    </did>
+  </archdesc>
+</ead>'''
+        
+        bioghist_content = '''<bioghist id="aspace_123">
+  <head>Historical Note from Test Agent Creator Record</head>
+  <p>Test paragraph</p>
+</bioghist>'''
+        
+        result = self.service.inject_collection_metadata(
+            xml_input,
+            record_group="Test Group",
+            subgroup="Test Subgroup",
+            bioghist_content=bioghist_content
+        )
+        
+        # Should have XML declaration
+        self.assertTrue(result.startswith('<?xml'), 'XML declaration should be preserved')
+        
+        # Should preserve default EAD namespace
+        self.assertIn('xmlns="urn:isbn:1-931666-22-9"', result)
+        self.assertNotIn('ns0:', result, 'Default namespace should not be rewritten to ns0:')
+        
+        # Inserted elements should be in same namespace (no xmlns="" pollution)
+        self.assertNotIn('xmlns=""', result, 'Should not have empty namespace declarations')
+        
+        # Tags should use default namespace, not prefixed
+        self.assertIn('<recordgroup>', result)
+        self.assertIn('<subgroup>', result)
+        self.assertIn('<bioghist ', result)
+        self.assertNotIn('<ns0:recordgroup', result)
+
+    def test_namespace_preservation_no_declaration_maintained(self):
+        """Test that documents without XML declaration remain without it when no changes made."""
+        xml_input = '''<eac-cpf>
+<control>
+  <recordId>test-agent</recordId>
+</control>
+</eac-cpf>'''
+        
+        # No changes will be made (no resourceRelations)
+        result = self.service.add_collection_links_to_eac_cpf(xml_input)
+        
+        # Should not add XML declaration when original didn't have one and no changes made
+        self.assertEqual(xml_input, result, 'Unchanged XML should be returned as-is')
+        self.assertFalse(result.startswith('<?xml'), 'Should not add XML declaration to unchanged document')
+
 
 if __name__ == '__main__':
     unittest.main()
