@@ -985,7 +985,7 @@ class ArcFlow:
             text=True,
             cwd=self.arclight_dir
         )
-        arcuit_dir = result.stdout.strip()
+        arcuit_dir = result_show.stdout.strip()
         traject_config = os.path.join(arcuit_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb')
         if os.path.exists(traject_config):
            self.log.info(f'✓ Using traject config from arclight: {traject_config}')
