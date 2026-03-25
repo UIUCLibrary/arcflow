@@ -328,9 +328,9 @@ def get_job_issue_types():
     """Function to return a dictionary of common issues found in job output, with regular expressions to match"""
     return {
         "csv_issue_count_top_container": r"Top Container \[.+\]( would be)? created",
-        "csv_issue_count_unable_container": r"Unable to create Container Instance 1:",
-        "java_mysql_error": r"Java::ComMysqlJdbcExceptionsJdbc4::MySQLTransactionRollbackException: Lock wait timeout exceeded; try restarting transaction",
-        "count_not_processed_parent_error": r"will not be processed due to errors: The parent archival object was not created"
+        "csv_issue_count_unable_container": r"Unable to create Container Instance .+: \[undefined method",
+        "java_mysql_error": r"(.+)?Java::ComMysqlJdbcExceptionsJdbc4::MySQLTransactionRollbackException:",
+        "count_not_processed_parent_error": r".+will not be processed due to errors: The parent archival object was not created"
     }
 
 def get_issue_assessment_fieldnames():
