@@ -29,34 +29,16 @@
 #     </origination>
 #   </ead>
 
-#
-
 # Creator ArcLight IDs - extracted from arcuit:creator_id attributes on origination
 # name elements (<corpname>, <persname>, <famname>) injected by arcflow.
 # Uses custom namespace xmlns:arcuit="https://arcuit.library.illinois.edu/ead-extensions"
 # Indexed as an array of creator IDs (e.g., ["creator_corporate_entities_123"])
 # for bidirectional creator↔collection linking in Solr.
-to_field 'creator_arclight_ids_ssim' do |record, accumulator|
-  # Define namespace
-  arcuit_ns = {'arcuit' => 'https://arcuit.library.illinois.edu/ead-extensions',
-               'ead' => 'urn:isbn:1-931666-22-9'}
-
-  # Extract arcuit:creator_id from origination name elements
-  record.xpath('//ead:archdesc/ead:did/ead:origination/ead:corpname[@arcuit:creator_id] |
-                //ead:archdesc/ead:did/ead:origination/ead:persname[@arcuit:creator_id] |
-                //ead:archdesc/ead:did/ead:origination/ead:famname[@arcuit:creator_id]',
-               arcuit_ns).each do |node|
-    accumulator << node['arcuit:creator_id']
-  end
-
-  # Also check without EAD namespace (some ASpace EAD exports omit it)
-  if accumulator.empty?
-    record.xpath('//archdesc/did/origination/corpname[@arcuit:creator_id] |
-                  //archdesc/did/origination/persname[@arcuit:creator_id] |
-                  //archdesc/did/origination/famname[@arcuit:creator_id]',
-                 arcuit_ns).each do |node|
-      accumulator << node['arcuit:creator_id']
-    end
+to_field 'creator_arclight_ids_ssim' do |record, accumulator, context|
+  record.xpath('/ead/archdesc/did/origination/persname|
+                /ead/archdesc/did/origination/corpname|
+                /ead/archdesc/did/origination/famname').each do |node|
+    accumulator << node['creator_id']
   end
 end
 
