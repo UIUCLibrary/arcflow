@@ -203,6 +203,14 @@ to_field 'related_agent_ids_ssim' do |record, accumulator|
   end
 end
 
+# Related Agents - Parallel array of names to match relationship ids, uris and type
+to_field 'related_agent_names_ssim' do |record, accumulator|
+  relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation/eac:relationEntry', EAC_NS)
+  relations.each do |rel|
+    accumulator << rel.text
+  end
+end
+
 # Related Agents - Parallel array of relationship types to match relationship ids and uris
 to_field 'related_agent_relationship_types_ssim' do |record, accumulator|
   relations = record.xpath('//eac:cpfDescription/eac:relations/eac:cpfRelation', EAC_NS)
@@ -224,6 +232,66 @@ to_field 'relationship_types_ssim' do |record, accumulator|
   end
 end
 
+# Collections this creator is responsible for - EAD IDs injected by arcflow
+# into <resourceRelation resourceRelationType="creatorOf"> elements as:
+#   <descriptiveNote><p>ead_id:{ead_id}</p></descriptiveNote>
+# Indexed as an array of EAD IDs (e.g., ["ALA.9.5.16"]) for bidirectional
+# creator↔collection linking in Solr.
+to_field 'creator_of_collection__collection_ids_ssim' do |record, accumulator|
+  relations = record.xpath(
+    '//eac:cpfDescription/eac:relations/eac:resourceRelation[@resourceRelationType="creatorOf"]',
+    EAC_NS
+  )
+  relations.each do |rel|
+    note = rel.xpath('eac:descriptiveNote/eac:p', EAC_NS).first
+    if note && note.text =~ /\Aead_id:(.+)\z/
+      accumulator << $1.strip
+    end
+  end
+end
+
+to_field 'creator_of_collection__collection_name_ssim' do |record, accumulator|
+  relations = record.xpath(
+    '//eac:cpfDescription/eac:relations/eac:resourceRelation[@resourceRelationType="creatorOf"]',
+    EAC_NS
+  )
+  relations.each do |rel|
+    note = rel.xpath('eac:descriptiveNote/eac:p', EAC_NS).first
+    if note && note.text =~ /\Aead_id:(.+)\z/
+      name = rel.xpath('eac:relationEntry', EAC_NS)
+      accumulator << name.text
+    end
+  end
+end
+
+
+to_field 'creator_of_digital_object__do_ids_ssim' do |record, accumulator|
+  relations = record.xpath(
+    '//eac:cpfDescription/eac:relations/eac:resourceRelation[@resourceRelationType="creatorOf"]',
+    EAC_NS
+  )
+  relations.each do |rel|
+    href = rel['href'] || rel['xlink:href']
+    if href.include? "digital_object"
+      accumulator << href
+    end
+  end
+end
+
+to_field 'subject_of_digital_object__do_ids_ssim' do |record, accumulator|
+  relations = record.xpath(
+    '//eac:cpfDescription/eac:relations/eac:resourceRelation[@resourceRelationType="subjectOf"]',
+    EAC_NS
+  )
+  relations.each do |rel|
+    href = rel['href'] || rel['xlink:href']
+    if href.include? "digital_object"
+      accumulator << href
+    end
+  end
+end
+
+
 # Agent source URI (from original ArchivesSpace)
 to_field 'agent_uri_ssi' do |record, accumulator|
   # Try to extract from control section or otherRecordId
@@ -237,11 +305,6 @@ end
 to_field 'timestamp' do |record, accumulator|
   accumulator << Time.now.utc.iso8601
 end
-
-# # Document type marker
-# to_field 'document_type' do |record, accumulator|
-#   accumulator << 'creator'
-# end
 
 # Log successful indexing
 each_record do |record, context|
