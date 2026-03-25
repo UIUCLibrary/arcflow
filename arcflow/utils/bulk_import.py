@@ -211,7 +211,9 @@ def save_report(path, report_list, validate_only):
 
     report_csv_file_name = report_file_name_stem + ".csv"
 
-    fieldnames = ['identifier','ead_id','aspace_url','import_date','repo_id', 'rid', 'only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri',"csv_issue_count","csv_issue_count_top_container","csv_issue_count_unable_container"]
+    fieldnames = ['identifier','ead_id','aspace_url','import_date','repo_id', 'rid', 'only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri']
+    issue_assessment_fieldnames = get_issue_assessment_fieldnames()
+    fieldnames.extend(issue_assessment_fieldnames)
     
     csv_report_save_path = os.path.join(report_save_path, report_csv_file_name)
     with open(csv_report_save_path, "w", newline="", encoding='utf-8') as csvfile:
@@ -268,17 +270,15 @@ def retrieve_job_output(path, report_list, asnake_client):
             with open(output_file_path, "wb") as f:
                 f.write(response.content)
             print(f"File {output_file_name} downloaded successfully.")
-            issue_count = check_job_output("Info or Error",output_file_path)
-            row["csv_issue_count"] = issue_count
-            issue_count_top_container = check_job_output("Info or Error",output_file_path,r"Top Container \[.+\]( would be)? created")
-            row["csv_issue_count_top_container"] = issue_count_top_container
-            issue_count_unable_container = check_job_output("Info or Error",output_file_path,r"Unable to create Container Instance 1:")
-            row["csv_issue_count_unable_container"] = issue_count_unable_container
+            issue_total_count = check_job_output("Info or Error",output_file_path)
+            row["csv_issue_count"] = issue_total_count
+            determine_issue_types(row, issue_total_count, output_file_path)
         else:
             report_csv_error(row, f"Failed to retrieve file for identifier {identifier} and job id {job_id}. Status code: {response.status_code}")
 
 def check_job_output(column_heading, file_path, pattern=""):
     """Function to check whether any data was logged in a specified column of a CSV at a given path, and if so how many rows have data in them. Returns -1 for errors."""
+    
     if not os.path.exists(file_path):
         print(f"Error: File '{file_path}' does not exist.")
         return -1
@@ -312,6 +312,33 @@ def check_job_output(column_heading, file_path, pattern=""):
         print(f"An unexpected error occurred with '{file_path}': {e}")
 
     return -1
+
+def determine_issue_types(csv_info, issue_total_count, job_output_file_path):
+    """Function to check rows of the job output file for specific types of issues. Modifies the csv info dictionary to log this data and calculates the number of issues not accounted for."""
+    issue_types = get_job_issue_types()
+    found_issues = 0
+    for issue, value in issue_types.items():
+        issue_count = check_job_output("Info or Error",job_output_file_path,value)
+        csv_info[issue] = issue_count
+        found_issues += issue_count
+
+    csv_info["unaccounted for issues"] = issue_total_count - found_issues
+
+def get_job_issue_types():
+    """Function to return a dictionary of common issues found in job output, with regular expressions to match"""
+    return {
+        "csv_issue_count_top_container": r"Top Container \[.+\]( would be)? created",
+        "csv_issue_count_unable_container": r"Unable to create Container Instance 1:",
+        "java_mysql_error": r"Java::ComMysqlJdbcExceptionsJdbc4::MySQLTransactionRollbackException: Lock wait timeout exceeded; try restarting transaction",
+        "count_not_processed_parent_error": r"will not be processed due to errors: The parent archival object was not created"
+    }
+
+def get_issue_assessment_fieldnames():
+    """Function to return the dictionary keys added to the csv_rows in the determine_issue_types() function"""
+    issue_fieldnames = ["csv_issue_count"]
+    issue_fieldnames.extend(list(get_job_issue_types().keys()))
+    issue_fieldnames.append("unaccounted for issues")
+    return issue_fieldnames
 
 def main():
     parser = argparse.ArgumentParser(description='ArchivesSpace CSV Bulk Import Tool')
