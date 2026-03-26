@@ -80,12 +80,61 @@ def check_for_children(repo_id, rid, asnake_client):
         print(f'Error retrieving child count for resource ID: {e}')
         return -1
 
+def delete_archival_object(repo_id, ao_id, asnake_client):
+    """
+    Function to delete an archival object by ID. 
+    Returns True if successful, False otherwise.
+    """
+    try:
+        delete_response = asnake_client.delete(
+            f"/repositories/{repo_id}/archival_objects/{ao_id}")
+        if delete_response.status_code == 200:
+            print(f"Deleted archival object {ao_id} successfully.")
+            return True
+        else:
+            print(f"Failed to delete archival object {ao_id}. Status code: {delete_response.status_code}")
+            return False
+    except Exception as e:
+        print(f'Error deleting archival object ID {ao_id}: {e}')
+        return False
+
+def delete_children(repo_id, rid, asnake_client):
+    """
+    Function to delete all top-level children of a resource. 
+    Returns integer value for the number of children deleted or -1 if encounters an error.
+    """
+    try:
+        info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/root").json()
+        child_count = int(info.get('child_count', 0))
+        if child_count > 0:
+            for child in info['precomputed_waypoints']['']['0']:
+                delete_archival_object(repo_id, child['uri'].split('/')[-1], asnake_client)
+
+        waypoints = int(info.get('waypoints', 0))
+        # in case there are children than the precomputed_waypoints
+        # starting with 2 because 1 equals to precomputed_waypoints
+        for i in range(2, waypoints+1):
+            info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/waypoint",
+                params={
+                    'offset': i-1,
+            }).json()
+            for child in info:
+                delete_archival_object(repo_id, child['uri'].split('/')[-1], asnake_client)
+    except Exception as e:
+        print(f'Error deleting children for resource ID: {e}')
+        return -1
+
 def report_csv_error(report_dict, error_string):
     """Function to print and log error messages (assumes only one error message)."""
     report_dict["error"] = error_string
     print(error_string)
 
-def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false', save_output_files=False):
+def csv_bulk_import(
+        csv_directory=None, 
+        load_type='ao', 
+        only_validate='false', 
+        save_output_files=False,
+        overwrite_children=False):
     """Function to handle CSV bulk import."""
     print("Starting CSV bulk import...")
     if not csv_directory or not os.path.exists(csv_directory):
@@ -136,15 +185,22 @@ def csv_bulk_import(csv_directory=None, load_type='ao', only_validate='false', s
         file_import_report["rid"] = rid
 
         if load_type == "ao":
-            child_count = check_for_children(repo, rid, client)
-            if child_count > 0:
-                report_csv_error(file_import_report, f'EAD ID {ead_id} already has {child_count} top-level children in ASpace. Not imported.')
-                bulk_import_report.append(file_import_report)
-                continue
-            elif child_count == -1:
-                report_csv_error(file_import_report, f'Error checking children for EAD ID {ead_id}. Not imported.')
-                bulk_import_report.append(file_import_report)
-                continue
+            if overwrite_children:
+                deleted_children = delete_children(repo, rid, client)
+                if deleted_children == -1:
+                    report_csv_error(file_import_report, f'Error deleting children for EAD ID {ead_id}. Not imported.')
+                    bulk_import_report.append(file_import_report)
+                    continue
+            else:
+                child_count = check_for_children(repo, rid, client)
+                if child_count > 0:
+                    report_csv_error(file_import_report, f'EAD ID {ead_id} already has {child_count} top-level children in ASpace. Not imported.')
+                    bulk_import_report.append(file_import_report)
+                    continue
+                elif child_count == -1:
+                    report_csv_error(file_import_report, f'Error checking children for EAD ID {ead_id}. Not imported.')
+                    bulk_import_report.append(file_import_report)
+                    continue
 
         file_list = []
         with open(f, 'rb') as file:
@@ -328,6 +384,10 @@ def main():
         '--save-output-files',
         action='store_true',
         help='Download job output files',)
+    parser.add_argument(
+        '--overwrite-children',
+        action='store_true',
+        help='Overwrite existing children during import',)
     args = parser.parse_args()
 
     if not args.dir.endswith('/'):
@@ -337,8 +397,9 @@ def main():
         csv_directory=args.dir,
         load_type=args.load_type,
         only_validate='true' if args.only_validate else 'false',
-        save_output_files=args.save_output_files)
-    
+        save_output_files=args.save_output_files,
+        overwrite_children=args.overwrite_children)
+
     save_report(args.dir, import_report, args.only_validate)
 
 if __name__ == '__main__':
