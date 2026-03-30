@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 from asnake.client import ASnakeClient
+from multiprocessing.pool import ThreadPool as Pool
 import re
 
 
@@ -106,20 +107,32 @@ def delete_children(repo_id, rid, asnake_client):
     try:
         info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/root").json()
         child_count = int(info.get('child_count', 0))
-        if child_count > 0:
-            for child in info['precomputed_waypoints']['']['0']:
-                delete_archival_object(repo_id, child['uri'].split('/')[-1], asnake_client)
+        with Pool(processes=10) as pool:
+            if child_count > 0:
+                results = [pool.apply_async(
+                    delete_archival_object, 
+                    args=(repo_id, child['uri'].split('/')[-1], asnake_client)) 
+                    for child in info['precomputed_waypoints']['']['0']]
+                # wait for task to complete
+                for r in results:
+                    r.get()
 
-        waypoints = int(info.get('waypoints', 0))
-        # in case there are children than the precomputed_waypoints
-        # starting with 2 because 1 equals to precomputed_waypoints
-        for i in range(2, waypoints+1):
-            info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/waypoint",
-                params={
-                    'offset': i-1,
-            }).json()
-            for child in info:
-                delete_archival_object(repo_id, child['uri'].split('/')[-1], asnake_client)
+            waypoints = int(info.get('waypoints', 0))
+            # in case there are children than the precomputed_waypoints
+            # starting with 2 because 1 equals to precomputed_waypoints
+            for i in range(2, waypoints+1):
+                info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/waypoint",
+                    params={
+                        'offset': i-1,
+                }).json()
+                results = [pool.apply_async(
+                    delete_archival_object, 
+                    args=(repo_id, child['uri'].split('/')[-1], asnake_client)) 
+                    for child in info]
+                # wait for task to complete
+                for r in results:
+                    r.get()
+        return child_count
     except Exception as e:
         print(f'Error deleting children for resource ID: {e}')
         return -1
@@ -134,7 +147,8 @@ def csv_bulk_import(
         load_type='ao', 
         only_validate='false', 
         save_output_files=False,
-        overwrite_children=False):
+        overwrite_children=False,
+        only_delete_children=False):
     """Function to handle CSV bulk import."""
     print("Starting CSV bulk import...")
     if not csv_directory or not os.path.exists(csv_directory):
@@ -185,10 +199,15 @@ def csv_bulk_import(
         file_import_report["rid"] = rid
 
         if load_type == "ao":
-            if overwrite_children:
+            if overwrite_children or only_delete_children:
                 deleted_children = delete_children(repo, rid, client)
                 if deleted_children == -1:
                     report_csv_error(file_import_report, f'Error deleting children for EAD ID {ead_id}. Not imported.')
+                    bulk_import_report.append(file_import_report)
+                    continue
+                if only_delete_children:
+                    file_import_report["results_status"] = "Completed"
+                    file_import_report["results_warnings"] = f"Deleted {deleted_children} children. No import performed."
                     bulk_import_report.append(file_import_report)
                     continue
             else:
@@ -419,6 +438,10 @@ def main():
         '--overwrite-children',
         action='store_true',
         help='Overwrite existing children during import',)
+    parser.add_argument(
+        '--only-delete-children',
+        action='store_true',
+        help='Only delete existing children without performing import',)
     args = parser.parse_args()
 
     if not args.dir.endswith('/'):
@@ -429,7 +452,8 @@ def main():
         load_type=args.load_type,
         only_validate='true' if args.only_validate else 'false',
         save_output_files=args.save_output_files,
-        overwrite_children=args.overwrite_children)
+        overwrite_children=args.overwrite_children,
+        only_delete_children=args.only_delete_children)
 
     save_report(args.dir, import_report, args.only_validate)
 
