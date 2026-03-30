@@ -148,9 +148,14 @@ def csv_bulk_import(
         only_validate='false', 
         save_output_files=False,
         overwrite_children=False,
-        only_delete_children=False):
+        only_delete_children=False,
+        report_text_file=""):
     """Function to handle CSV bulk import."""
-    print("Starting CSV bulk import...")
+    if report_text_file:
+        print(f"Retrying CSV bulk import with report file {report_text_file}...")
+    else:
+        print("Starting CSV bulk import...")
+
     if not csv_directory or not os.path.exists(csv_directory):
         print(f'Directory {csv_directory} does not exist. Exiting.')
         exit(0)
@@ -160,8 +165,26 @@ def csv_bulk_import(
 
     bulk_import_report = []
 
-    for f in glob.iglob(f'{csv_directory}*.csv'):
-        print(f'Processing file {f}...')
+    if report_text_file:
+        try:
+            with open(report_text_file, "r") as file:
+                entries = yaml.safe_load(file)
+        except FileNotFoundError:
+            print(f"File {report_text_file} not found.")
+            exit(0)
+    else:
+        entries = glob.iglob(f'{csv_directory}*.csv')
+
+    for f in entries:
+        if report_text_file:
+            if f['java_mysql_error']>0:
+                f = f"{csv_directory}{f['identifier']}.csv"
+                print(f'Retrying file {f}...')
+            else:
+                continue
+        else:
+            print(f'Processing file {f}...')
+
         file_import_report = {}
         file_import_report["identifier"] = Path(f).stem
         file_import_report["type"] = load_type
@@ -258,6 +281,10 @@ def csv_bulk_import(
 
         bulk_import_report.append(file_import_report)
         print(json.dumps(import_job, indent=4))
+
+    if not bulk_import_report:
+        print("No more files to process. Exiting.")
+        exit(0)
     
     if save_output_files:
         try:
@@ -281,7 +308,7 @@ def save_report(path, report_list, validate_only):
 
     txt_report_save_path = os.path.join(report_save_path, report_text_file_name)
     with open(txt_report_save_path, 'w', encoding='utf-8') as report:
-        print("Import Job Info", file=report)
+        print("# Import Job Info", file=report)
         json.dump(report_list, report, indent=4)
 
     report_csv_file_name = report_file_name_stem + ".csv"
@@ -296,6 +323,8 @@ def save_report(path, report_list, validate_only):
         writer.writeheader()
         for row in report_list:
             writer.writerow(row)
+
+    return f"{report_save_path}/{report_text_file_name}"
 
 def check_job_status(asnake_client, repo_id, job_id):
     """Function to check whether a job has completed (and thus output files are ready)."""
@@ -442,20 +471,34 @@ def main():
         '--only-delete-children',
         action='store_true',
         help='Only delete existing children without performing import',)
+    parser.add_argument(
+        '--max-retries',
+        type=int,
+        default=0,
+        help='Number of times to retry a failed job (default: 0)',)
     args = parser.parse_args()
 
     if not args.dir.endswith('/'):
         args.dir += '/'
 
-    import_report = csv_bulk_import(
-        csv_directory=args.dir,
-        load_type=args.load_type,
-        only_validate='true' if args.only_validate else 'false',
-        save_output_files=args.save_output_files,
-        overwrite_children=args.overwrite_children,
-        only_delete_children=args.only_delete_children)
+    report_text_file = ""
+    while True:
+        if args.max_retries < 0:
+            print("Maximum retries reached. Exiting.")
+            break
+        else:
+            import_report = csv_bulk_import(
+                csv_directory=args.dir,
+                load_type=args.load_type,
+                only_validate='true' if args.only_validate else 'false',
+                save_output_files=args.save_output_files,
+                overwrite_children=args.overwrite_children,
+                only_delete_children=args.only_delete_children,
+                report_text_file=report_text_file)
 
-    save_report(args.dir, import_report, args.only_validate)
+            report_text_file = save_report(args.dir, import_report, args.only_validate)
+
+            args.max_retries -= 1
 
 if __name__ == '__main__':
     main()
