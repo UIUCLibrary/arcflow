@@ -67,3 +67,20 @@ solr-config/
 
 # Environment configuration
 .env
+# Docker local testing - working data (can be deleted/regenerated)
+mysql-data/
+archivesspace-data/
+solr-data/
+arclight-data/
+
+# Docker local testing - backup data (preserve but don't commit)
+# These are large files that should be obtained from dev server
+backup-data/
+
+# Docker local testing - config directories (may contain sensitive data)
+configsets/
+
+# Temporary backup files
+*.sql
+*.sql.gz
+*.tar.gz

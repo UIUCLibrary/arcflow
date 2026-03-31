@@ -2,21 +2,20 @@ services:
   # MySQL database for ArchivesSpace
   mysql:
     image: mysql:5.7
-    container_name: archivesspace-mysql
+    container_name: local-archivesspace-mysql
     ports:
       - "3306:3306"
+    volumes:
+      - ./mysql-data:/var/lib/mysql
+      - ./backup-data/mysql:/backup/mysql:ro  # Read-only backup
+      - ./mysql-entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
     environment:
       MYSQL_ROOT_PASSWORD: root123
-      MYSQL_DATABASE: archivesspace
-      MYSQL_USER: as
-      MYSQL_PASSWORD: as123
-    volumes:
-      - mysql-data:/var/lib/mysql
-      - ./mysql-init:/docker-entrypoint-initdb.d:ro
-      - ./mysql-backup:/mysql-backup
+      MYSQL_ALLOW_EMPTY_PASSWORD: "no"
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     networks:
       - arclight-network
+    entrypoint: ["/bin/bash", "/usr/local/bin/custom-entrypoint.sh"]
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot123"]
       interval: 10s
@@ -26,7 +25,7 @@ services:
   # ArchivesSpace 2.6
   archivesspace:
     image: archivesspace/archivesspace:v2.6.0
-    container_name: archivesspace
+    container_name: local-archivesspace
     ports:
       - "8080:8080"  # Staff interface
       - "8081:8081"  # Public interface
@@ -41,65 +40,60 @@ services:
       ARCHIVESSPACE_DB_USER: "as"
       ARCHIVESSPACE_DB_PASS: "as123"
     volumes:
-      - aspace-data:/archivesspace/data
-      - ./archivesspace-config:/archivesspace/config:ro
+      - ./archivesspace-data:/archivesspace/data
+      - ./backup-data/archivesspace:/backup/archivesspace:ro
     networks:
       - arclight-network
     depends_on:
       mysql:
         condition: service_healthy
 
-  # Solr for ArcLight
+  # Solr for ArcLight (with blacklight-core and archivesspace cores)
   solr:
-    image: solr:8.11.2
-    container_name: arclight-solr
+    image: solr:8.11.3
+    container_name: local-arclight-solr
     ports:
       - "8983:8983"
     volumes:
-      - solr-data:/var/solr
-      - ./solr-config:/opt/solr-config:ro
+      - ./solr-data:/var/solr
+      - ./configsets/blacklight-core:/opt/solr/server/solr/configsets/blacklight-core
+      - ./configsets/archivesspace:/opt/solr/server/solr/configsets/archivesspace
+      - ./backup-data/blacklight-core:/backup/blacklight-core:ro
+      - ./backup-data/archivesspace-solr:/backup/archivesspace-solr:ro
+      - ./solr-entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
     environment:
-      - SOLR_HEAP=1g
+      - SOLR_OPTS=-Dsolr.max.booleanClauses=2048
+      - SOLR_HEAP=2g
     command:
       - solr-precreate
-      - arclight
-      - /opt/solr-config
+      - blacklight-core
+      - /opt/solr/server/solr/configsets/blacklight-core
+    entrypoint: ["/bin/bash", "/usr/local/bin/custom-entrypoint.sh"]
     networks:
       - arclight-network
 
   # ArcLight 1.6.2 (Rails application)
   # Note: This requires a custom Dockerfile - see arclight/Dockerfile
+  # Disabled by default - enable with: docker compose --profile arclight up
   arclight:
     build:
       context: ./arclight
       dockerfile: Dockerfile
-    container_name: arclight-app
+    container_name: local-arclight-app
     ports:
       - "3000:3000"
     environment:
-      SOLR_URL: "http://solr:8983/solr/arclight"
+      SOLR_URL: "http://solr:8983/solr/blacklight-core"
       RAILS_ENV: "development"
       SECRET_KEY_BASE: "development_secret_key_base_change_in_production"
     volumes:
-      - arclight-data:/app/tmp
-      - ./arclight-config:/app/config/local:ro
+      - ./arclight-data:/app/tmp
     networks:
       - arclight-network
     depends_on:
       - solr
-    # Uncomment to enable the ArcLight container
     profiles:
-      - full
-
-volumes:
-  mysql-data:
-    driver: local
-  aspace-data:
-    driver: local
-  solr-data:
-    driver: local
-  arclight-data:
-    driver: local
+      - arclight
 
 networks:
   arclight-network:
