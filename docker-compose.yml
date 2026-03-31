@@ -1,4 +1,55 @@
 services:
+  # MySQL database for ArchivesSpace
+  mysql:
+    image: mysql:5.7
+    container_name: archivesspace-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: archivesspace
+      MYSQL_USER: as
+      MYSQL_PASSWORD: as123
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+      - ./mysql-backup:/mysql-backup
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    networks:
+      - arclight-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot123"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ArchivesSpace 2.6
+  archivesspace:
+    image: archivesspace/archivesspace:v2.6.0
+    container_name: archivesspace
+    ports:
+      - "8080:8080"  # Staff interface
+      - "8081:8081"  # Public interface
+      - "8089:8089"  # Backend API
+      - "8090:8090"  # Solr admin
+    environment:
+      ASPACE_JAVA_XMX: "-Xmx1g"
+      ARCHIVESSPACE_DB_TYPE: "mysql"
+      ARCHIVESSPACE_DB_HOST: "mysql"
+      ARCHIVESSPACE_DB_PORT: "3306"
+      ARCHIVESSPACE_DB_NAME: "archivesspace"
+      ARCHIVESSPACE_DB_USER: "as"
+      ARCHIVESSPACE_DB_PASS: "as123"
+    volumes:
+      - aspace-data:/archivesspace/data
+      - ./archivesspace-config:/archivesspace/config:ro
+    networks:
+      - arclight-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # Solr for ArcLight
   solr:
     image: solr:8.11.2
     container_name: arclight-solr
@@ -16,24 +67,39 @@ services:
     networks:
       - arclight-network
 
-  # Optional: Include if you want to run ArchivesSpace locally too
-  # archivesspace:
-  #   image: archivesspace/archivesspace:latest
-  #   container_name: arclight-archivesspace
-  #   ports:
-  #     - "8080:8080"
-  #     - "8089:8089"
-  #     - "8090:8090"
-  #   volumes:
-  #     - aspace-data:/archivesspace/data
-  #   networks:
-  #     - arclight-network
+  # ArcLight 1.6.2 (Rails application)
+  # Note: This requires a custom Dockerfile - see arclight/Dockerfile
+  arclight:
+    build:
+      context: ./arclight
+      dockerfile: Dockerfile
+    container_name: arclight-app
+    ports:
+      - "3000:3000"
+    environment:
+      SOLR_URL: "http://solr:8983/solr/arclight"
+      RAILS_ENV: "development"
+      SECRET_KEY_BASE: "development_secret_key_base_change_in_production"
+    volumes:
+      - arclight-data:/app/tmp
+      - ./arclight-config:/app/config/local:ro
+    networks:
+      - arclight-network
+    depends_on:
+      - solr
+    # Uncomment to enable the ArcLight container
+    profiles:
+      - full
 
 volumes:
+  mysql-data:
+    driver: local
+  aspace-data:
+    driver: local
   solr-data:
     driver: local
-  # aspace-data:
-  #   driver: local
+  arclight-data:
+    driver: local
 
 networks:
   arclight-network:
