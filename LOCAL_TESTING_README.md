@@ -298,21 +298,18 @@ tar -xzf archivesspace-solr.tar.gz -C backup-data\
 # Extract ArchivesSpace data
 tar -xzf archivesspace-data.tar.gz -C backup-data\archivesspace\
 
-# For MySQL restoration on Windows, follow similar Docker steps as Mac/Linux
-docker compose up -d mysql
-# Wait 10 seconds
-Start-Sleep -Seconds 10
+# For MySQL restoration on Windows
+New-Item -ItemType Directory -Force -Path backup-data\mysql
 
-# Import database
-Get-Content archivesspace.sql | docker exec -i local-archivesspace-mysql mysql -u root -proot123 archivesspace
-
-# Stop and backup
-docker compose down
-Copy-Item -Recurse -Force mysql-data\* backup-data\mysql\
-Remove-Item -Recurse -Force mysql-data
+# Decompress SQL file (Windows tar handles .gz)
+# First extract the .sql from .sql.gz
+gunzip archivesspace.sql.gz
+# Or if gunzip not available, use 7-Zip or extract with:
+# tar -xzf archivesspace.sql.gz
+Move-Item archivesspace.sql backup-data\mysql\
 
 # Clean up
-Remove-Item *.tar.gz, *.sql.gz
+Remove-Item *.tar.gz
 ```
 
 ### Step 9: Clean Up on Dev Server
@@ -333,7 +330,14 @@ Now that you have all backup data, start the full environment:
 docker compose up -d
 ```
 
-The entrypoint scripts will automatically restore from `backup-data/` on first run!
+The entrypoint scripts will automatically:
+- Import the MySQL database from `backup-data/mysql/archivesspace.sql` on first run
+- Restore Solr cores from `backup-data/` directories
+
+**Note**: The first startup may take 1-2 minutes as MySQL imports the database. Check logs with:
+```bash
+docker compose logs -f mysql
+```
 
 ## Common Commands
 
@@ -432,12 +436,23 @@ arcflow/
 
 ## Updating Your Backup from Dev Server
 
-To refresh your local backups with the latest data from the dev server, follow the complete process in the **"Getting Data from Dev Server"** section above, then:
+To refresh your local backups with the latest data from the dev server, follow the complete process in the **"Getting Data from Dev Server"** section above. The key steps are:
 
 1. Stop your local environment: `docker compose down -v`
 2. Remove old backups: `rm -rf backup-data/*`
-3. Follow Steps 1-9 to create fresh backups
-4. Start environment: `docker compose up -d`
+3. SSH to dev server and create fresh MySQL dump and Solr tarballs (Steps 1-6)
+4. Copy files to local machine (Step 7)
+5. Extract locally:
+   ```bash
+   mkdir -p backup-data/mysql
+   gunzip -c archivesspace.sql.gz > backup-data/mysql/archivesspace.sql
+   tar -xzf blacklight-core.tar.gz -C backup-data/
+   tar -xzf archivesspace-solr.tar.gz -C backup-data/
+   rm *.tar.gz *.sql.gz
+   ```
+6. Start environment: `docker compose up -d`
+
+The MySQL database will be automatically imported from the new SQL dump file on startup.
 
 ## Troubleshooting
 

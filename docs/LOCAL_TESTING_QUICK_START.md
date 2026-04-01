@@ -43,20 +43,14 @@ cd /path/to/arcflow
 scp archivesspace-dev.library.illinois.edu:~/aspace-backup/* .
 
 # Create backup structure
-mkdir -p backup-data
+mkdir -p backup-data/mysql
 
 # Extract Solr cores
 tar -xzf blacklight-core.tar.gz -C backup-data/
 tar -xzf archivesspace-solr.tar.gz -C backup-data/
 
-# Setup MySQL backup
-docker compose up -d mysql
-sleep 15
-gunzip -c archivesspace.sql.gz | docker exec -i local-archivesspace-mysql mysql -u root -proot123 archivesspace
-docker compose down
-mkdir -p backup-data/mysql
-sudo cp -r mysql-data/* backup-data/mysql/
-rm -rf mysql-data
+# Extract MySQL dump (uncompressed)
+gunzip -c archivesspace.sql.gz > backup-data/mysql/archivesspace.sql
 
 # Cleanup
 rm *.tar.gz *.sql.gz
