@@ -75,7 +75,11 @@ arclight-data/
 
 # Docker local testing - backup data (preserve but don't commit)
 # These are large files that should be obtained from dev server
-backup-data/
+backup-data/*
+!backup-data/mysql/
+backup-data/mysql/*
+!backup-data/mysql/README.md
+!backup-data/mysql/archivesspace.sql
 
 # Docker local testing - config directories (may contain sensitive data)
 configsets/
@@ -84,3 +88,6 @@ configsets/
 *.sql
 *.sql.gz
 *.tar.gz
+
+# Exception: Allow minimal test dump
+!backup-data/mysql/archivesspace.sql
