@@ -1,14 +1,22 @@
 # MySQL Database Backup
 
-This directory should contain an uncompressed MySQL dump file from ArchivesSpace.
+This directory is for an optional MySQL dump file from ArchivesSpace.
 
 ## What's Included
 
-This directory contains a minimal test SQL dump (`archivesspace.sql`) that allows the Docker environment to start successfully. This is intentionally minimal - ArchivesSpace will create its full schema on first startup.
+This directory is **empty by default**. When you run `docker compose up` for the first time:
+- MySQL creates an empty `archivesspace` database  
+- ArchivesSpace automatically runs its `setup-database.sh` script to initialize the schema (takes 2-3 minutes)
+- Default admin user (admin/admin) is created
+- All migrations are applied
 
-**For production/development use**: Replace `archivesspace.sql` with a real database dump from your ArchivesSpace instance.
+This gives you a **fresh, working ArchivesSpace installation** with no data.
 
-## How to Create a Real Backup
+## For Production/Development Use
+
+To use real data from your ArchivesSpace instance, place a MySQL dump file here and it will be imported instead of creating a fresh installation.
+
+### How to Create a Real Backup
 
 See the main **LOCAL_TESTING_README.md**, section "Getting Data from Dev Server" for complete instructions.
 
@@ -24,40 +32,33 @@ mkdir -p backup-data/mysql
 gunzip -c archivesspace.sql.gz > backup-data/mysql/archivesspace.sql
 ```
 
-## What Should Be Here
+## What Can Be Here
 
-This directory should contain:
+This directory can optionally contain:
 - `archivesspace.sql` - Uncompressed MySQL database dump file
 
-**Important**: The file must be named `archivesspace.sql` (uncompressed, not `.gz`)
+**Important**: If present, the file must be named `archivesspace.sql` (uncompressed, not `.gz`)
 
-## Restoration
+## Restoration Behavior
 
-When you run `docker compose up`, the `mysql-entrypoint.sh` script automatically:
-1. Checks if `/var/lib/mysql/archivesspace` database exists in the container
-2. If not, waits for MySQL to start
-3. Creates the `archivesspace` database and `as` user
-4. Imports everything from `backup-data/mysql/archivesspace.sql`
+**When `archivesspace.sql` exists:**
+- `mysql-entrypoint.sh` imports the dump file on first startup
+- ArchivesSpace uses the imported database  
+- Results in a copy of your production/dev data
 
-This allows you to reset to a clean state anytime by:
+**When `archivesspace.sql` does NOT exist (default):**
+- MySQL creates an empty database
+- ArchivesSpace auto-initializes schema on first startup (takes 2-3 minutes)
+- Results in a fresh installation with default admin user (admin/admin)
+
+## Reset to Fresh Installation
+
+To reset to a clean state:
+
 ```bash
 docker compose down -v
-rm -rf mysql-data/
 docker compose up -d
 ```
 
-The database will be re-imported from the SQL dump file automatically.
-
-## Test Dump
-
-The included `archivesspace.sql` is a minimal test dump suitable for:
-- Testing that the Docker environment starts correctly
-- Verifying the import process works
-- Running ArchivesSpace for the first time (it will initialize its schema)
-
-It does **not** include:
-- Any collection data
-- User accounts beyond defaults
-- Custom configuration
-
-Replace it with your actual database dump for real use.
+- If you have an SQL dump file, it re-imports it
+- If you don't have an SQL dump file, ArchivesSpace reinitializes a fresh installation

@@ -81,13 +81,13 @@ Your folder should contain:
 ```
 arcflow/
 ├── backup-data/
-│   ├── mysql/                    # MySQL database backup (archivesspace.sql)
+│   ├── mysql/                    # MySQL database backup (optional - auto-initializes if empty)
 │   ├── archivesspace/           # ArchivesSpace data backup (optional)
-│   ├── blacklight-core/         # ArcLight Solr core backup
-│   └── archivesspace-solr/      # ArchivesSpace Solr core backup
+│   ├── blacklight-core/         # ArcLight Solr core backup (required for Solr cores)
+│   └── archivesspace-solr/      # ArchivesSpace Solr core backup (required for Solr cores)
 ├── configsets/
-│   ├── blacklight-core/         # Solr config for ArcLight
-│   └── archivesspace/           # Solr config for ArchivesSpace
+│   ├── blacklight-core/         # Solr config for ArcLight (required for Solr cores)
+│   └── archivesspace/           # Solr config for ArchivesSpace (required for Solr cores)
 ├── archivesspace/
 │   ├── Dockerfile               # Custom build for ArchivesSpace 2.6.0
 │   └── docker-startup.sh        # Startup configuration script
@@ -100,15 +100,21 @@ arcflow/
 └── LOCAL_TESTING_README.md
 ```
 
-**Test Data Included**: A minimal MySQL dump (`backup-data/mysql/archivesspace.sql`) is included for initial testing. This allows you to start the environment immediately.
+**Works Out of the Box**: The environment includes everything needed for basic testing:
+- MySQL and ArchivesSpace will auto-initialize on first startup (takes 2-3 minutes)
+- Default admin credentials: admin/admin
+- Solr will start but won't have cores until you add configsets
 
-**For Production Testing**: Replace the test dump with a real mysqldump from the dev server, and populate `configsets/` (see "Getting Data from Dev Server" below).
+**For Production Testing with Real Data**: 
+- Add `archivesspace.sql` to `backup-data/mysql/` (see "Getting Data from Dev Server")
+- Add Solr configsets to `configsets/` (see "Getting Data from Dev Server")
+- Add Solr core backups to `backup-data/` (see "Getting Data from Dev Server")
 
-**Windows users**: If you downloaded as a ZIP file, the line endings in the entrypoint scripts might be incorrect. Run `./verify-setup.sh` to check, or see the Troubleshooting section.
+**Windows users**: If you downloaded as a ZIP file, run `./verify-setup.sh` to check line endings in shell scripts.
 
 ### 3. Build and Start the Environment
 
-**First time** (builds ArchivesSpace image):
+**First time** (builds ArchivesSpace image and initializes database):
 
 ```bash
 cd arcflow
@@ -116,26 +122,35 @@ docker compose build
 docker compose up -d
 ```
 
-**Subsequent starts**:
+**Important**: First startup takes **2-3 minutes** while ArchivesSpace initializes its database schema. You'll see this in the logs:
+```
+📋 Database schema not found - initializing ArchivesSpace database...
+This will take a few minutes on first startup...
+```
+
+**Subsequent starts** (much faster):
 
 ```bash
 cd arcflow
 docker compose up -d
 ```
 
-Wait about 60-90 seconds for all services to initialize. ArchivesSpace takes longer on first startup while it initializes the database.
-
 You can monitor progress with:
 
 ```bash
-docker compose logs -f
+docker compose logs -f archivesspace
 ```
+
+Watch for these messages to confirm successful initialization:
+- `✅ Database initialization complete!`
+- `INFO: Started SelectChannelConnector@0.0.0.0:8089`
+- Wait another minute for frontend/public interfaces to start
 
 Press `Ctrl+C` to stop following logs.
 
 ### 4. Verify Services Are Running
 
-Check that all services are healthy:
+After 2-3 minutes for first startup (or 30 seconds for subsequent starts), check that all services are healthy:
 
 ```bash
 docker compose ps
@@ -143,23 +158,59 @@ docker compose ps
 
 You should see:
 - `local-archivesspace-mysql` - healthy
-- `local-archivesspace` - running (may show "health: starting" for first minute)
+- `local-archivesspace` - running (health: healthy after ~3 minutes)
 - `local-arclight-solr` - running
 
-**Note**: Solr may show errors about missing cores if you haven't yet populated `configsets/` from the dev server. This is expected - MySQL and ArchivesSpace should still work.
+**Note**: Solr may show errors about missing cores if you haven't added configsets. This is expected - MySQL and ArchivesSpace will still work fine.
 
 ### 5. Access the Interfaces
 
+Once ArchivesSpace is fully started (check logs or wait 3 minutes after first `docker compose up`), access these interfaces:
+
 - **ArchivesSpace Staff Interface**: http://localhost:8080
-  - Default login: `admin` / `admin` (or credentials from your backup)
+  - Login: `admin` / `admin`
+  - Main interface for managing archives
+
 - **ArchivesSpace Public Interface**: http://localhost:8081
+  - Public-facing search and browse interface
+
 - **ArchivesSpace API**: http://localhost:8089
+  - Backend API for integrations
+  - Returns JSON with version info at the root
+
 - **Solr Admin**: http://localhost:8983/solr/
-  - ArcLight core: http://localhost:8983/solr/blacklight-core
-  - ArchivesSpace core: http://localhost:8983/solr/archivesspace-solr
+  - Search engine administration
+  - Note: Cores won't be available until you add configsets
+  - ArcLight core (when configured): http://localhost:8983/solr/blacklight-core
+  - ArchivesSpace core (when configured): http://localhost:8983/solr/archivesspace-solr
+
 - **MySQL**: `localhost:3306`
   - User: `as` / Password: `as123`
   - Database: `archivesspace`
+
+## First Time Startup Notes
+
+**First startup takes 2-3 minutes** because ArchivesSpace must:
+1. Wait for MySQL to be ready
+2. Detect empty database
+3. Run database setup script (creates ~120 tables and migrations)
+4. Initialize all three application servers (backend, staff, public)
+
+**What you'll see in logs**:
+```
+📋 Database schema not found - initializing ArchivesSpace database...
+This will take a few minutes on first startup...
+[...many migration messages...]
+All done.
+✅ Database initialization complete!
+Starting ArchivesSpace...
+[...startup messages...]
+INFO: Started SelectChannelConnector@0.0.0.0:8089
+[...wait another minute...]
+[Staff and public interfaces become available]
+```
+
+**Subsequent startups** are much faster (~30 seconds) since the database already exists.
 
 ### 6. (Optional) Start ArcLight
 
