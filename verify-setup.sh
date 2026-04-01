@@ -15,6 +15,31 @@ NC='\033[0m' # No Color
 errors=0
 warnings=0
 
+# Check and create .env file if needed
+echo "🔐 Checking environment configuration..."
+if [ ! -f ".env" ]; then
+    echo -e "${YELLOW}⚠${NC}  .env file not found - creating from template..."
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        echo -e "${GREEN}✓${NC} Created .env from .env.example"
+        echo -e "${YELLOW}ℹ${NC}  Review .env and update if needed (uses defaults for local testing)"
+    else
+        echo -e "${RED}✗${NC} Cannot create .env - .env.example not found"
+        ((errors++))
+    fi
+else
+    echo -e "${GREEN}✓${NC} Found: .env"
+    
+    # Check for required MySQL variables
+    if grep -q "^MYSQL_DATABASE=" .env && grep -q "^MYSQL_USER=" .env && grep -q "^MYSQL_PASSWORD=" .env; then
+        echo -e "${GREEN}✓${NC} MySQL environment variables configured"
+    else
+        echo -e "${YELLOW}⚠${NC}  .env is missing MySQL variables - check .env.example"
+        ((warnings++))
+    fi
+fi
+echo ""
+
 # Check for required files
 echo "📁 Checking required files..."
 required_files=(

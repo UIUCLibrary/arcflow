@@ -67,11 +67,9 @@ solr-config/
 
 # Environment configuration
 .env
-# Docker local testing - working data (can be deleted/regenerated)
-mysql-data/
-archivesspace-data/
-solr-data/
-arclight-data/
+# Docker local testing - working data (managed by Docker volumes)
+# Note: Using named volumes instead of bind mounts for better permission handling
+# mysql-data, archivesspace-data, and solr-data are now Docker-managed volumes
 
 # Docker local testing - backup data (preserve but don't commit)
 # These are large files that should be obtained from dev server

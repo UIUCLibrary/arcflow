@@ -16,7 +16,8 @@ RUN apt-get update && \
     apt-get -y install --no-install-recommends \
         ca-certificates \
         wget \
-        unzip && \
+        unzip \
+        netcat-openbsd && \
     rm -rf /var/lib/apt/lists/*
 
 # Download and install ArchivesSpace v2.6.0 from GitHub releases

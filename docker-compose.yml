@@ -12,9 +12,9 @@ services:
       - ./mysql-entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
     environment:
       MYSQL_ROOT_PASSWORD: root123
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-archivesspace}
+      MYSQL_USER: ${MYSQL_USER:-as}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-as123}
       MYSQL_ALLOW_EMPTY_PASSWORD: "no"
     networks:
       - arclight-network
@@ -41,11 +41,11 @@ services:
       ARCHIVESSPACE_DB_TYPE: "mysql"
       ARCHIVESSPACE_DB_HOST: "mysql"
       ARCHIVESSPACE_DB_PORT: "3306"
-      ARCHIVESSPACE_DB_NAME: ${MYSQL_DATABASE}
-      ARCHIVESSPACE_DB_USER: ${MYSQL_USER}
-      ARCHIVESSPACE_DB_PASS: ${MYSQL_PASSWORD}
+      ARCHIVESSPACE_DB_NAME: ${MYSQL_DATABASE:-archivesspace}
+      ARCHIVESSPACE_DB_USER: ${MYSQL_USER:-as}
+      ARCHIVESSPACE_DB_PASS: ${MYSQL_PASSWORD:-as123}
     volumes:
-      - ./archivesspace-data:/archivesspace/data
+      - archivesspace-data:/archivesspace/data
       - ./backup-data/archivesspace:/backup/archivesspace:ro
     networks:
       - arclight-network
@@ -60,7 +60,7 @@ services:
     ports:
       - "8983:8983"
     volumes:
-      - ./solr-data:/var/solr
+      - solr-data:/var/solr
       - ./configsets/blacklight-core:/opt/solr/server/solr/configsets/blacklight-core
       - ./configsets/archivesspace:/opt/solr/server/solr/configsets/archivesspace
       - ./backup-data/blacklight-core:/backup/blacklight-core:ro
@@ -78,8 +78,9 @@ services:
       - arclight-network
 
   # ArcLight 1.6.2 (Rails application)
-  # Note: This requires a custom Dockerfile - see arclight/Dockerfile
-  # Disabled by default - enable with: docker compose --profile arclight up
+  # Note: ArcLight is OPTIONAL and disabled by default
+  # To enable: 1) Create arclight/Dockerfile based on https://github.com/projectblacklight/arclight/tree/v1.6.2
+  #            2) Run: docker compose --profile arclight up
   arclight:
     build:
       context: ./arclight
@@ -105,3 +106,5 @@ networks:
     driver: bridge
 volumes:
   mysql-data:
+  archivesspace-data:
+  solr-data:
