@@ -21,15 +21,17 @@ services:
       timeout: 5s
       retries: 5
 
-  # ArchivesSpace 2.6
+  # ArchivesSpace 2.6 (custom build from GitHub release)
   archivesspace:
-    image: archivesspace/archivesspace:v2.6.0
+    build:
+      context: ./archivesspace
+      dockerfile: Dockerfile
     container_name: local-archivesspace
     ports:
       - "8080:8080"  # Staff interface
       - "8081:8081"  # Public interface
       - "8089:8089"  # Backend API
-      - "8090:8090"  # Solr admin
+      - "8090:8090"  # Solr admin (disabled, using external Solr)
     environment:
       ASPACE_JAVA_XMX: "-Xmx1g"
       ARCHIVESSPACE_DB_TYPE: "mysql"
