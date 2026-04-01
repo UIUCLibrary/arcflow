@@ -7,26 +7,32 @@ This is a complete local testing environment for ArchivesSpace 2.6, ArcLight 1.6
 ## What This Does
 
 ### TL;DR
-In the root directory, `docker compose up -d` will start:
+In the root directory, run `./verify-setup.sh` then `docker compose up -d` to start:
 - **MySQL 5.7**: Database for ArchivesSpace
-- **ArchivesSpace 2.6**: Staff and public interfaces for archives management
+- **ArchivesSpace 2.6**: Staff and public interfaces (custom-built from GitHub release)
 - **Solr 8.11.3**: Search indexes with two cores (blacklight-core and archivesspace-solr)
 
-Optionally add ArcLight 1.6.2 with: `docker compose --profile arclight up -d`
+Optionally add ArcLight 1.6.2 with: `docker compose --profile arclight up -d` (requires creating `arclight/Dockerfile`)
 
 ### More Details
 
 This environment:
 - Runs ArchivesSpace, MySQL, and Solr in Docker containers on your laptop
-- Contains production-like data from the dev server
+- Includes a minimal test database for immediate testing
+- Can be populated with production-like data from the dev server
 - Includes three main components:
-  - **MySQL**: ArchivesSpace database with clean snapshot
-  - **ArchivesSpace 2.6**: Full installation with staff interface (port 8080) and API (port 8089)
-  - **Solr**: Two cores for search:
+  - **MySQL**: ArchivesSpace database with auto-import from SQL dump
+  - **ArchivesSpace 2.6**: Custom-built from GitHub release (no Docker Hub image available for v2.6)
+    - Staff interface: http://localhost:8080
+    - Backend API: http://localhost:8089
+    - Public interface: http://localhost:8081
+  - **Solr**: Two cores for search (requires configsets from dev server):
     - `blacklight-core`: ArcLight search index
     - `archivesspace-solr`: ArchivesSpace index
-- Automatically restores from backup on first `docker compose up`
-- Lets you test migration and indexing changes safely - if you break it, just delete the working data and restart
+- Automatically builds ArchivesSpace on first `docker compose build`
+- Automatically restores MySQL database from `backup-data/mysql/archivesspace.sql` on first startup
+- Uses Docker-managed volumes for data persistence (better permission handling)
+- Lets you test migration and indexing changes safely - if you break it, just `docker compose down -v` and restart
 - **Caution**: Don't delete the `backup-data` directory - it contains your clean snapshots
 
 ## Prerequisites
@@ -51,51 +57,75 @@ Note: Docker Desktop requires a license for commercial use in larger organizatio
 
 ## Quick Start
 
-### 1. Get the Files
+### 1. Verify Prerequisites
+
+Run the verification script to check your setup:
+
+```bash
+cd arcflow
+./verify-setup.sh
+```
+
+This will:
+- Check that Docker is installed and running
+- Create `.env` file from `.env.example` if it doesn't exist
+- Verify required files and directories are present
+- Check line endings on shell scripts
+
+**First-time setup**: The script will create a `.env` file with default test credentials. These are fine for local testing, but you can edit `.env` if needed.
+
+### 2. Get the Files
 
 Your folder should contain:
 
 ```
 arcflow/
 ├── backup-data/
-│   ├── mysql/                    # MySQL database backup
+│   ├── mysql/                    # MySQL database backup (archivesspace.sql)
 │   ├── archivesspace/           # ArchivesSpace data backup (optional)
 │   ├── blacklight-core/         # ArcLight Solr core backup
 │   └── archivesspace-solr/      # ArchivesSpace Solr core backup
 ├── configsets/
 │   ├── blacklight-core/         # Solr config for ArcLight
 │   └── archivesspace/           # Solr config for ArchivesSpace
+├── archivesspace/
+│   ├── Dockerfile               # Custom build for ArchivesSpace 2.6.0
+│   └── docker-startup.sh        # Startup configuration script
+├── .env                          # Environment variables (created by verify-setup.sh)
+├── .env.example                  # Template for environment variables
 ├── docker-compose.yml
 ├── mysql-entrypoint.sh
 ├── solr-entrypoint.sh
-└── README.md
+├── verify-setup.sh
+└── LOCAL_TESTING_README.md
 ```
 
-**Note**: The `backup-data` directory is not in the repository - you need to create it and populate it from the dev server (see "Initial Setup from Dev Server" below).
+**Test Data Included**: A minimal MySQL dump (`backup-data/mysql/archivesspace.sql`) is included for initial testing. This allows you to start the environment immediately.
 
-**Windows users**: If you downloaded as a ZIP file, the line endings in the entrypoint scripts might be incorrect. If you get errors, see the Troubleshooting section.
+**For Production Testing**: Replace the test dump with a real mysqldump from the dev server, and populate `configsets/` (see "Getting Data from Dev Server" below).
 
-### 2. Initial Setup from Dev Server
+**Windows users**: If you downloaded as a ZIP file, the line endings in the entrypoint scripts might be incorrect. Run `./verify-setup.sh` to check, or see the Troubleshooting section.
 
-Before your first run, you need to get the backup data from the development server. See the **"Getting Data from Dev Server"** section below for detailed instructions.
+### 3. Build and Start the Environment
 
-### 3. Start the Environment
+**First time** (builds ArchivesSpace image):
 
-**Mac/Linux - Terminal:**
+```bash
+cd arcflow
+docker compose build
+docker compose up -d
+```
+
+**Subsequent starts**:
 
 ```bash
 cd arcflow
 docker compose up -d
 ```
 
-**Windows - PowerShell or Command Prompt:**
+Wait about 60-90 seconds for all services to initialize. ArchivesSpace takes longer on first startup while it initializes the database.
 
-```powershell
-cd arcflow
-docker compose up -d
-```
-
-Wait about 30-60 seconds for all services to initialize. You can monitor progress with:
+You can monitor progress with:
 
 ```bash
 docker compose logs -f
@@ -113,8 +143,10 @@ docker compose ps
 
 You should see:
 - `local-archivesspace-mysql` - healthy
-- `local-archivesspace` - running
+- `local-archivesspace` - running (may show "health: starting" for first minute)
 - `local-arclight-solr` - running
+
+**Note**: Solr may show errors about missing cores if you haven't yet populated `configsets/` from the dev server. This is expected - MySQL and ArchivesSpace should still work.
 
 ### 5. Access the Interfaces
 
@@ -256,32 +288,20 @@ scp archivesspace-dev.library.illinois.edu:~/aspace-backup/* .
 **Mac/Linux:**
 
 ```bash
-# Extract Solr cores
+# Extract Solr cores to backup-data
 mkdir -p backup-data
 tar -xzf blacklight-core.tar.gz -C backup-data/
 tar -xzf archivesspace-solr.tar.gz -C backup-data/
 
-# Extract ArchivesSpace data (if you backed it up)
+# Extract ArchivesSpace data to backup-data (if you backed it up)
+mkdir -p backup-data/archivesspace
 tar -xzf archivesspace-data.tar.gz -C backup-data/archivesspace/
 
-# For MySQL, we need to restore the database into the backup directory
-# First, start just MySQL
-docker compose up -d mysql
+# Extract MySQL dump to backup-data/mysql
+mkdir -p backup-data/mysql
+gunzip -c archivesspace.sql.gz > backup-data/mysql/archivesspace.sql
 
-# Wait for MySQL to be ready
-sleep 10
-
-# Import the database
-gunzip -c archivesspace.sql.gz | docker exec -i local-archivesspace-mysql mysql -u root -proot123 archivesspace
-
-# Now stop MySQL and capture the data directory
-docker compose down
-
-# Copy the initialized MySQL data to backup
-sudo cp -r mysql-data/* backup-data/mysql/
-
-# Clean up working data
-rm -rf mysql-data
+# The MySQL entrypoint script will automatically import this on first startup
 
 # Clean up downloaded tarballs
 rm *.tar.gz *.sql.gz
@@ -296,20 +316,23 @@ tar -xzf blacklight-core.tar.gz -C backup-data\
 tar -xzf archivesspace-solr.tar.gz -C backup-data\
 
 # Extract ArchivesSpace data
+New-Item -ItemType Directory -Force -Path backup-data\archivesspace
 tar -xzf archivesspace-data.tar.gz -C backup-data\archivesspace\
 
-# For MySQL restoration on Windows
+# Extract MySQL dump
 New-Item -ItemType Directory -Force -Path backup-data\mysql
 
-# Decompress SQL file (Windows tar handles .gz)
-# First extract the .sql from .sql.gz
+# Decompress SQL file
+# If you have gunzip:
 gunzip archivesspace.sql.gz
-# Or if gunzip not available, use 7-Zip or extract with:
-# tar -xzf archivesspace.sql.gz
 Move-Item archivesspace.sql backup-data\mysql\
 
+# Or extract with tar if gunzip not available:
+# tar -xzf archivesspace.sql.gz
+# Move-Item archivesspace.sql backup-data\mysql\
+
 # Clean up
-Remove-Item *.tar.gz
+Remove-Item *.tar.gz, *.sql.gz -ErrorAction SilentlyContinue
 ```
 
 ### Step 9: Clean Up on Dev Server
@@ -371,23 +394,15 @@ docker compose logs -f solr
 
 To restore everything to the original backup state:
 
-**Mac/Linux:**
-
 ```bash
+# Stop all services and remove volumes
 docker compose down -v
-rm -rf mysql-data/ archivesspace-data/ solr-data/
+
+# Restart (will re-import from backup-data)
 docker compose up -d
 ```
 
-**Windows (PowerShell):**
-
-```powershell
-docker compose down -v
-Remove-Item -Recurse -Force mysql-data, archivesspace-data, solr-data
-docker compose up -d
-```
-
-This deletes all your changes and restores from the backups in `backup-data/`.
+This deletes all Docker-managed volumes and restores from the backups in `backup-data/`. Note that with named volumes, you don't need to manually delete directories.
 
 ### Access MySQL Database
 

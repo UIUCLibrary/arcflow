@@ -32,7 +32,8 @@ fi
 echo "🚀 Starting MySQL..."
 
 # Start MySQL in the background
-docker-entrypoint.sh mysqld --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci &
+# Note: Using utf8 (not utf8mb4) for compatibility with ArchivesSpace 2.6.0
+docker-entrypoint.sh mysqld --character-set-server=utf8 --collation-server=utf8_unicode_ci &
 MYSQL_PID=$!
 
 # If we need to import, wait for MySQL to be ready and then import
@@ -51,7 +52,7 @@ if [ -f /tmp/need_import ]; then
     
     # Create database if it doesn't exist
     echo "📋 Creating database '${MYSQL_DATABASE}'..."
-    mysql -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" -e "CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || true
+    mysql -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" -e "CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8 COLLATE utf8_unicode_ci;" 2>/dev/null || true
     
     # Create user and grant privileges
     echo "📋 Creating database user '${MYSQL_USER}'..."

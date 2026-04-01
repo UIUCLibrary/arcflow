@@ -17,7 +17,8 @@ RUN apt-get update && \
         ca-certificates \
         wget \
         unzip \
-        netcat-openbsd && \
+        netcat-openbsd \
+        default-mysql-client && \
     rm -rf /var/lib/apt/lists/*
 
 # Download and install ArchivesSpace v2.6.0 from GitHub releases
