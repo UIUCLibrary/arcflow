@@ -101,12 +101,20 @@ arcflow/
 ```
 
 **Works Out of the Box**: The environment includes everything needed for basic testing:
-- MySQL and ArchivesSpace will auto-initialize on first startup (takes 2-3 minutes)
-- Default admin credentials: admin/admin
-- Solr will start but won't have cores until you add configsets
+- **Test MySQL dump included**: `backup-data/mysql/archivesspace.sql` contains a fresh ArchivesSpace v2.6.0 installation
+- **Fast startup**: ~60 seconds (vs 2-3 minutes without dump)
+- **Default admin credentials**: admin/admin
+- **Solr will start** but won't have cores until you add configsets
+
+**Two Ways to Start:**
+
+1. **With test dump (default - FAST)**: Included dump is imported → ~60 second startup
+2. **Without dump (optional - SLOW)**: Remove archivesspace.sql → Auto-initializes schema → ~3 minute startup
+
+Both give you the same fresh installation with admin/admin credentials.
 
 **For Production Testing with Real Data**: 
-- Add `archivesspace.sql` to `backup-data/mysql/` (see "Getting Data from Dev Server")
+- Replace `archivesspace.sql` with mysqldump from dev server (see "Getting Data from Dev Server")
 - Add Solr configsets to `configsets/` (see "Getting Data from Dev Server")
 - Add Solr core backups to `backup-data/` (see "Getting Data from Dev Server")
 
@@ -114,7 +122,7 @@ arcflow/
 
 ### 3. Build and Start the Environment
 
-**First time** (builds ArchivesSpace image and initializes database):
+**First time** (builds ArchivesSpace image):
 
 ```bash
 cd arcflow
@@ -122,50 +130,58 @@ docker compose build
 docker compose up -d
 ```
 
-**Important**: First startup takes **2-3 minutes** while ArchivesSpace initializes its database schema. You'll see this in the logs:
-```
-📋 Database schema not found - initializing ArchivesSpace database...
-This will take a few minutes on first startup...
-```
+**With the included test dump**: Startup takes **~60 seconds**
+- MySQL imports the test database dump
+- ArchivesSpace detects schema exists and starts immediately
 
-**Subsequent starts** (much faster):
+**Subsequent starts** (same speed):
 
 ```bash
 cd arcflow
 docker compose up -d
 ```
 
-You can monitor progress with:
+Monitor progress with:
 
 ```bash
 docker compose logs -f archivesspace
 ```
 
-Watch for these messages to confirm successful initialization:
-- `✅ Database initialization complete!`
+Watch for these messages:
+- `✅ SQL dump found at /backup/mysql/archivesspace.sql`
+- `✅ Database import complete!`
+- `✅ Database schema already exists`
 - `INFO: Started SelectChannelConnector@0.0.0.0:8089`
-- Wait another minute for frontend/public interfaces to start
+- Shortly after: Staff (8080) and Public (8081) interfaces become available
 
 Press `Ctrl+C` to stop following logs.
 
-### 4. Verify Services Are Running
+### 4. Verify Everything Works
 
-After 2-3 minutes for first startup (or 30 seconds for subsequent starts), check that all services are healthy:
+Run the test script:
+
+```bash
+./test-environment.sh
+```
+
+This will check all services and show you the status of each endpoint.
+
+Or check manually:
 
 ```bash
 docker compose ps
 ```
 
-You should see:
+You should see all services as healthy/running:
 - `local-archivesspace-mysql` - healthy
-- `local-archivesspace` - running (health: healthy after ~3 minutes)
+- `local-archivesspace` - healthy (after ~1 minute)
 - `local-arclight-solr` - running
 
-**Note**: Solr may show errors about missing cores if you haven't added configsets. This is expected - MySQL and ArchivesSpace will still work fine.
+**Note**: Solr may show errors about missing cores if you haven't added configsets. This is expected - ArchivesSpace will still work fine.
 
 ### 5. Access the Interfaces
 
-Once ArchivesSpace is fully started (check logs or wait 3 minutes after first `docker compose up`), access these interfaces:
+Once ArchivesSpace is fully started (~60 seconds after `docker compose up`), access these interfaces:
 
 - **ArchivesSpace Staff Interface**: http://localhost:8080
   - Login: `admin` / `admin`
@@ -188,29 +204,17 @@ Once ArchivesSpace is fully started (check logs or wait 3 minutes after first `d
   - User: `as` / Password: `as123`
   - Database: `archivesspace`
 
-## First Time Startup Notes
+## Startup Time Comparison
 
-**First startup takes 2-3 minutes** because ArchivesSpace must:
-1. Wait for MySQL to be ready
-2. Detect empty database
-3. Run database setup script (creates ~120 tables and migrations)
-4. Initialize all three application servers (backend, staff, public)
+**With test dump (default)**: ~60 seconds
+- MySQL imports 344KB SQL file
+- ArchivesSpace detects schema and starts immediately
 
-**What you'll see in logs**:
-```
-📋 Database schema not found - initializing ArchivesSpace database...
-This will take a few minutes on first startup...
-[...many migration messages...]
-All done.
-✅ Database initialization complete!
-Starting ArchivesSpace...
-[...startup messages...]
-INFO: Started SelectChannelConnector@0.0.0.0:8089
-[...wait another minute...]
-[Staff and public interfaces become available]
-```
+**Without dump (remove archivesspace.sql)**: ~3 minutes
+- ArchivesSpace runs setup-database.sh
+- Creates schema from scratch with 120 migrations
 
-**Subsequent startups** are much faster (~30 seconds) since the database already exists.
+Both give you the same working installation - the dump just makes it faster.
 
 ### 6. (Optional) Start ArcLight
 

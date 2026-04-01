@@ -79,6 +79,10 @@ backup-data/mysql/*
 !backup-data/mysql/README.md
 !backup-data/mysql/archivesspace.sql
 
+# Exception: Allow the test SQL dump for immediate testing
+# This is a 344KB dump with full schema but no data
+!backup-data/mysql/archivesspace.sql
+
 # Docker local testing - config directories (may contain sensitive data)
 configsets/
 
@@ -87,5 +91,5 @@ configsets/
 *.sql.gz
 *.tar.gz
 
-# Exception: Allow minimal test dump
+# Exception: Allow the test MySQL dump for immediate testing
 !backup-data/mysql/archivesspace.sql
