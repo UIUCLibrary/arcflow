@@ -2,6 +2,7 @@ services:
   # MySQL database for ArchivesSpace
   mysql:
     image: mysql:5.7
+    platform: linux/amd64
     container_name: local-archivesspace-mysql
     ports:
       - "3306:3306"
@@ -11,6 +12,9 @@ services:
       - ./mysql-entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
     environment:
       MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_ALLOW_EMPTY_PASSWORD: "no"
     networks:
       - arclight-network
@@ -37,9 +41,9 @@ services:
       ARCHIVESSPACE_DB_TYPE: "mysql"
       ARCHIVESSPACE_DB_HOST: "mysql"
       ARCHIVESSPACE_DB_PORT: "3306"
-      ARCHIVESSPACE_DB_NAME: "archivesspace"
-      ARCHIVESSPACE_DB_USER: "as"
-      ARCHIVESSPACE_DB_PASS: "as123"
+      ARCHIVESSPACE_DB_NAME: ${MYSQL_DATABASE}
+      ARCHIVESSPACE_DB_USER: ${MYSQL_USER}
+      ARCHIVESSPACE_DB_PASS: ${MYSQL_PASSWORD}
     volumes:
       - ./archivesspace-data:/archivesspace/data
       - ./backup-data/archivesspace:/backup/archivesspace:ro

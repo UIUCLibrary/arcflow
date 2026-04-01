@@ -28,7 +28,7 @@ fi
 export APPCONFIG_ENABLE_SOLR=false
 
 # Set Java memory options
-export JAVA_OPTS="${ASPACE_JAVA_XMX:--Xmx1g} -XX:+UseG1GC"
+export JAVA_OPTS="${ASPACE_JAVA_XMX:--Xmx1g}"
 
 echo "Starting ArchivesSpace..."
 echo "Java options: $JAVA_OPTS"

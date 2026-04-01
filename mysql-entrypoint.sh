@@ -3,6 +3,12 @@
 
 set -e
 
+# Use env vars or fallback to defaults (matches official MySQL image defaults)
+MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-root123}"
+MYSQL_DATABASE="${MYSQL_DATABASE:-archivesspace}"
+MYSQL_USER="${MYSQL_USER:-as}"
+MYSQL_PASSWORD="${MYSQL_PASSWORD:-as123}"
+
 echo "🔍 Checking if we need to import MySQL database from backup..."
 
 # Check if MySQL data directory is empty or doesn't exist
@@ -44,14 +50,14 @@ if [ -f /tmp/need_import ]; then
     done
     
     # Create database if it doesn't exist
-    echo "📋 Creating archivesspace database..."
-    mysql -h 127.0.0.1 -u root -proot123 -e "CREATE DATABASE IF NOT EXISTS archivesspace CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || true
+    echo "📋 Creating database '${MYSQL_DATABASE}'..."
+    mysql -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" -e "CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || true
     
     # Create user and grant privileges
-    echo "📋 Creating database user..."
-    mysql -h 127.0.0.1 -u root -proot123 -e "CREATE USER IF NOT EXISTS 'as'@'%' IDENTIFIED BY 'as123';" 2>/dev/null || true
-    mysql -h 127.0.0.1 -u root -proot123 -e "GRANT ALL PRIVILEGES ON archivesspace.* TO 'as'@'%';" 2>/dev/null || true
-    mysql -h 127.0.0.1 -u root -proot123 -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+    echo "📋 Creating database user '${MYSQL_USER}'..."
+    mysql -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" -e "CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';" 2>/dev/null || true
+    mysql -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" -e "GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'%';" 2>/dev/null || true
+    mysql -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" -e "FLUSH PRIVILEGES;" 2>/dev/null || true
     
     # Import the SQL dump
     echo "📥 Importing database from /backup/mysql/archivesspace.sql..."
