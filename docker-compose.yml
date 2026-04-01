@@ -7,7 +7,7 @@ services:
     ports:
       - "3306:3306"
     volumes:
-      - ./mysql-data:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
       - ./backup-data/mysql:/backup/mysql:ro  # Read-only backup (should contain archivesspace.sql)
       - ./mysql-entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
     environment:
@@ -103,3 +103,5 @@ services:
 networks:
   arclight-network:
     driver: bridge
+volumes:
+  mysql-data:
