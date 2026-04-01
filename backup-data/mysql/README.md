@@ -2,7 +2,13 @@
 
 This directory should contain an uncompressed MySQL dump file from ArchivesSpace.
 
-## How to Create This Backup
+## What's Included
+
+This directory contains a minimal test SQL dump (`archivesspace.sql`) that allows the Docker environment to start successfully. This is intentionally minimal - ArchivesSpace will create its full schema on first startup.
+
+**For production/development use**: Replace `archivesspace.sql` with a real database dump from your ArchivesSpace instance.
+
+## How to Create a Real Backup
 
 See the main **LOCAL_TESTING_README.md**, section "Getting Data from Dev Server" for complete instructions.
 
@@ -41,3 +47,17 @@ docker compose up -d
 ```
 
 The database will be re-imported from the SQL dump file automatically.
+
+## Test Dump
+
+The included `archivesspace.sql` is a minimal test dump suitable for:
+- Testing that the Docker environment starts correctly
+- Verifying the import process works
+- Running ArchivesSpace for the first time (it will initialize its schema)
+
+It does **not** include:
+- Any collection data
+- User accounts beyond defaults
+- Custom configuration
+
+Replace it with your actual database dump for real use.

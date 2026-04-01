@@ -35,7 +35,7 @@ if [ -f /tmp/need_import ]; then
     
     # Wait for MySQL to be ready
     for i in {1..30}; do
-        if mysqladmin ping -h localhost -u root -proot123 --silent 2>/dev/null; then
+        if mysqladmin ping -h 127.0.0.1 -u root -proot123 --silent 2>/dev/null; then
             echo "✅ MySQL is ready!"
             break
         fi
@@ -45,17 +45,17 @@ if [ -f /tmp/need_import ]; then
     
     # Create database if it doesn't exist
     echo "📋 Creating archivesspace database..."
-    mysql -u root -proot123 -e "CREATE DATABASE IF NOT EXISTS archivesspace CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || true
+    mysql -h 127.0.0.1 -u root -proot123 -e "CREATE DATABASE IF NOT EXISTS archivesspace CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || true
     
     # Create user and grant privileges
     echo "📋 Creating database user..."
-    mysql -u root -proot123 -e "CREATE USER IF NOT EXISTS 'as'@'%' IDENTIFIED BY 'as123';" 2>/dev/null || true
-    mysql -u root -proot123 -e "GRANT ALL PRIVILEGES ON archivesspace.* TO 'as'@'%';" 2>/dev/null || true
-    mysql -u root -proot123 -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+    mysql -h 127.0.0.1 -u root -proot123 -e "CREATE USER IF NOT EXISTS 'as'@'%' IDENTIFIED BY 'as123';" 2>/dev/null || true
+    mysql -h 127.0.0.1 -u root -proot123 -e "GRANT ALL PRIVILEGES ON archivesspace.* TO 'as'@'%';" 2>/dev/null || true
+    mysql -h 127.0.0.1 -u root -proot123 -e "FLUSH PRIVILEGES;" 2>/dev/null || true
     
     # Import the SQL dump
     echo "📥 Importing database from /backup/mysql/archivesspace.sql..."
-    mysql -u root -proot123 archivesspace < /backup/mysql/archivesspace.sql
+    mysql -h 127.0.0.1 -u root -proot123 archivesspace < /backup/mysql/archivesspace.sql
     
     echo "✅ Database import complete!"
     rm /tmp/need_import
