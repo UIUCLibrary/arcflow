@@ -468,7 +468,7 @@ def main():
     parser.add_argument(
         '--overwrite-children',
         action='store_true',
-        help='Overwrite existing children during import',)
+        help='Overwrite/delete existing children during import/validation',)
     parser.add_argument(
         '--only-delete-children',
         action='store_true',
