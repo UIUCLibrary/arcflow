@@ -224,6 +224,7 @@ def csv_bulk_import(
         if load_type == "ao":
             if overwrite_children or only_delete_children:
                 deleted_children = delete_children(repo, rid, client)
+                file_import_report["deleted_children"] = deleted_children
                 if deleted_children == -1:
                     report_csv_error(file_import_report, f'Error deleting children for EAD ID {ead_id}. Not imported.')
                     bulk_import_report.append(file_import_report)
@@ -313,7 +314,7 @@ def save_report(path, report_list, validate_only):
 
     report_csv_file_name = report_file_name_stem + ".csv"
 
-    fieldnames = ['identifier','ead_id','aspace_url','import_date','repo_id', 'rid', 'only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri']
+    fieldnames = ['identifier','ead_id','aspace_url','import_date','repo_id', 'rid', 'only_validate','type','resource_id','error','results_status','results_warnings','results_id','results_uri','deleted_children']
     issue_assessment_fieldnames = get_issue_assessment_fieldnames()
     fieldnames.extend(issue_assessment_fieldnames)
     
