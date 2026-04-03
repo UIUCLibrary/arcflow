@@ -107,28 +107,29 @@ def delete_children(repo_id, rid, asnake_client):
     try:
         info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/root").json()
         child_count = int(info.get('child_count', 0))
-        with Pool(processes=10) as pool:
-            if child_count > 0:
+        if child_count > 0:
+            with Pool(processes=10) as pool:
+                waypoints = int(info.get('waypoints', 0))
+                # in case there are more children than the precomputed_waypoints
+                # starting with the highest waypoint and working backwards to avoid the list shrinking and changing offsets for remaining waypoints
+                for i in range(waypoints, 1, -1):
+                    waypoint = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/waypoint",
+                        params={
+                            'offset': i-1,
+                    }).json()
+                    results = [pool.apply_async(
+                        delete_archival_object, 
+                        args=(repo_id, child['uri'].split('/')[-1], asnake_client)) 
+                        for child in waypoint]
+                    # wait for task to complete
+                    for r in results:
+                        r.get()
+
+                # then delete the remaining children in the precomputed_waypoints
                 results = [pool.apply_async(
                     delete_archival_object, 
                     args=(repo_id, child['uri'].split('/')[-1], asnake_client)) 
                     for child in info['precomputed_waypoints']['']['0']]
-                # wait for task to complete
-                for r in results:
-                    r.get()
-
-            waypoints = int(info.get('waypoints', 0))
-            # in case there are children than the precomputed_waypoints
-            # starting with 2 because 1 equals to precomputed_waypoints
-            for i in range(2, waypoints+1):
-                info = asnake_client.get(f"/repositories/{repo_id}/resources/{rid}/tree/waypoint",
-                    params={
-                        'offset': i-1,
-                }).json()
-                results = [pool.apply_async(
-                    delete_archival_object, 
-                    args=(repo_id, child['uri'].split('/')[-1], asnake_client)) 
-                    for child in info]
                 # wait for task to complete
                 for r in results:
                     r.get()
