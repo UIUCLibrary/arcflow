@@ -177,7 +177,7 @@ def csv_bulk_import(
 
     for f in entries:
         if report_text_file:
-            if f['java_mysql_error']>0:
+            if f.get("java_mysql_error", 0) > 0:
                 f = f"{csv_directory}{f['identifier']}.csv"
                 print(f'Retrying file {f}...')
             else:
@@ -483,9 +483,11 @@ def main():
         args.dir += '/'
 
     report_text_file = ""
+    is_retrying = args.max_retries > 0
     while True:
         if args.max_retries < 0:
-            print("Maximum retries reached. Exiting.")
+            if is_retrying:
+                print("Maximum retries reached. Exiting.")
             break
         else:
             import_report = csv_bulk_import(
