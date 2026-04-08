@@ -83,8 +83,18 @@ backup-data/mysql/*
 # This is a 344KB dump with full schema but no data
 !backup-data/mysql/archivesspace.sql
 
-# Docker local testing - config directories (may contain sensitive data)
-configsets/
+# Docker local testing - config directories
+# Configsets should be provided by user from their environment
+configsets/*
+!configsets/blacklight-core/
+!configsets/archivesspace/
+configsets/blacklight-core/*
+configsets/archivesspace/*
+!configsets/blacklight-core/README.md
+!configsets/archivesspace/README.md
+
+# ArcLight data directory
+arclight-data/
 
 # Temporary backup files
 *.sql

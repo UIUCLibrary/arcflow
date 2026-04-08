@@ -53,7 +53,10 @@ services:
       mysql:
         condition: service_healthy
 
-  # Solr for ArcLight (with blacklight-core and archivesspace cores)
+  # Solr for ArcLight and ArchivesSpace
+  # Supports two modes:
+  #   1. With backups: Restores pre-populated data from backup-data/
+  #   2. Without backups: Creates blank cores from configsets/
   solr:
     image: solr:8.11.3
     container_name: local-arclight-solr
@@ -61,26 +64,22 @@ services:
       - "8983:8983"
     volumes:
       - solr-data:/var/solr
-      - ./configsets/blacklight-core:/opt/solr/server/solr/configsets/blacklight-core
-      - ./configsets/archivesspace:/opt/solr/server/solr/configsets/archivesspace
+      - ./configsets/blacklight-core:/opt/solr/server/solr/configsets/blacklight-core:ro
+      - ./configsets/archivesspace:/opt/solr/server/solr/configsets/archivesspace:ro
       - ./backup-data/blacklight-core:/backup/blacklight-core:ro
       - ./backup-data/archivesspace-solr:/backup/archivesspace-solr:ro
       - ./solr-entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
     environment:
       - SOLR_OPTS=-Dsolr.max.booleanClauses=2048
       - SOLR_HEAP=2g
-    command:
-      - solr-precreate
-      - blacklight-core
-      - /opt/solr/server/solr/configsets/blacklight-core
     entrypoint: ["/bin/bash", "/usr/local/bin/custom-entrypoint.sh"]
     networks:
       - arclight-network
 
   # ArcLight 1.6.2 (Rails application)
   # Note: ArcLight is OPTIONAL and disabled by default
-  # To enable: 1) Create arclight/Dockerfile based on https://github.com/projectblacklight/arclight/tree/v1.6.2
-  #            2) Run: docker compose --profile arclight up
+  # To enable: Run `docker compose --profile arclight up -d`
+  # Requires configsets to be populated in ./configsets/blacklight-core/
   arclight:
     build:
       context: ./arclight
