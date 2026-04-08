@@ -2,10 +2,23 @@
 # Based on https://github.com/projectblacklight/arclight/tree/v1.6.2
 # Note: ArcLight v1.6.2 requires Ruby >= 3.0.0
 
+# Stage 1: Get Node.js from official image (works on all platforms)
+FROM node:18-slim AS node
+
+# Stage 2: Build ArcLight application
 FROM ruby:3.0-slim
 
 LABEL maintainer="UIUC Library"
 LABEL description="ArcLight v1.6.2 for local testing"
+
+# Copy Node.js from the official image
+COPY --from=node /usr/local/bin/node /usr/local/bin/
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+# Verify Node.js installation
+RUN node --version && npm --version
 
 # Install system dependencies
 RUN apt-get update && \
@@ -13,18 +26,11 @@ RUN apt-get update && \
         build-essential \
         git \
         curl \
-        xz-utils \
         sqlite3 \
         libsqlite3-dev \
+        pkg-config \
         tzdata && \
     rm -rf /var/lib/apt/lists/*
-
-# Install Node.js 18.x LTS directly from nodejs.org
-RUN curl -fsSL https://nodejs.org/dist/v18.20.2/node-v18.20.2-linux-x64.tar.xz -o /tmp/node.tar.xz && \
-    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 && \
-    rm /tmp/node.tar.xz && \
-    node --version && \
-    npm --version
 
 # Install yarn
 RUN npm install -g yarn
