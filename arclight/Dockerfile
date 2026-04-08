@@ -57,8 +57,8 @@ RUN yarn install
 # Setup database
 RUN bundle exec rake db:migrate RAILS_ENV=development
 
-# Precompile assets
-RUN bundle exec rake assets:precompile RAILS_ENV=development
+# Note: Asset precompilation skipped in build - will happen at runtime
+# This avoids needing sassc native extension compilation during build
 
 # Expose port 3000
 EXPOSE 3000
