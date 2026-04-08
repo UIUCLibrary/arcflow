@@ -45,7 +45,6 @@ RUN gem install rails -v '~> 7.1.0'
 # Create a new Rails app with ArcLight v1.6.2
 RUN rails new . --skip-git --skip-bundle --database=sqlite3 && \
     echo "gem 'arclight', '~> 1.6.2'" >> Gemfile && \
-    echo "gem 'rsolr', '~> 2.0'" >> Gemfile && \
     bundle install
 
 # Generate ArcLight installation
