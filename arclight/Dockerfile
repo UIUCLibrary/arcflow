@@ -28,6 +28,7 @@ RUN apt-get update && \
         curl \
         sqlite3 \
         libsqlite3-dev \
+        libyaml-dev \
         pkg-config \
         tzdata && \
     rm -rf /var/lib/apt/lists/*
