@@ -6,7 +6,7 @@
 FROM node:18-slim AS node
 
 # Stage 2: Build ArcLight application
-FROM ruby:3.0-slim
+FROM ruby:3.2-slim
 
 LABEL maintainer="UIUC Library"
 LABEL description="ArcLight v1.6.2 for local testing"
