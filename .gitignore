@@ -84,14 +84,13 @@ backup-data/mysql/*
 !backup-data/mysql/archivesspace.sql
 
 # Docker local testing - config directories
-# Configsets should be provided by user from their environment
-configsets/*
+# Default configsets are provided for immediate working setup
+# Users can replace these with their own configurations if needed
+!configsets/
 !configsets/blacklight-core/
+!configsets/blacklight-core/**
 !configsets/archivesspace/
-configsets/blacklight-core/*
-configsets/archivesspace/*
-!configsets/blacklight-core/README.md
-!configsets/archivesspace/README.md
+!configsets/archivesspace/**
 
 # ArcLight data directory
 arclight-data/
