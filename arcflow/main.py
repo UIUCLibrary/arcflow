@@ -19,8 +19,8 @@ from datetime import datetime, timezone
 from asnake.client import ASnakeClient
 from multiprocessing.pool import ThreadPool as Pool
 from utils.stage_classifications import extract_labels
-from .services.xml_transform_service import XmlTransformService
-from .services.agent_service import AgentService
+from services.xml_transform_service import XmlTransformService
+from services.agent_service import AgentService
 import glob
 
 base_dir = os.path.abspath((__file__) + "/../../")
