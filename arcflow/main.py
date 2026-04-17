@@ -44,7 +44,22 @@ class ArcFlow:
     """
 
 
-    def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, ead_extra_config='', force_update=False, agents_only=False, collections_only=False, skip_creator_indexing=False):
+    def __init__(
+            self,
+            arclight_dir,
+            aspace_dir,
+            solr_url,
+            aspace_solr_url,
+            ead_extra_config='',
+            force_update=False,
+            agents_only=False,
+            collections_only=False,
+            skip_creator_indexing=False,
+            skip_pdf_generation=False,
+            repository_id=None,
+            skip_deleted_record_processing=False,
+            skip_timestamp_update=False,
+        ):
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
         self.batch_size = 400
@@ -67,6 +82,10 @@ class ArcFlow:
         self.agents_only = agents_only
         self.collections_only = collections_only
         self.skip_creator_indexing = skip_creator_indexing
+        self.skip_pdf_generation = skip_pdf_generation
+        self.repository_id = repository_id
+        self.skip_deleted_record_processing = skip_deleted_record_processing
+        self.skip_timestamp_update = skip_timestamp_update
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -294,7 +313,8 @@ class ArcFlow:
             # next level of indentation for nested operations
             indent_size += 2
 
-            pdf_job = (repo['uri'], self.request_pdf_job(repo['uri'], resource_id, indent_size=indent_size), resource['ead_id'])
+            if not self.skip_pdf_generation:
+                pdf_job = (repo['uri'], self.request_pdf_job(repo['uri'], resource_id, indent_size=indent_size), resource['ead_id'])
 
             # if the EAD ID was updated in ArchivesSpace,
             # delete the previous EAD in ArcLight Solr
@@ -415,7 +435,12 @@ class ArcFlow:
 
         # process resources that have been modified in ArchivesSpace since last update
         self.log.info('Fetching resources from ArchivesSpace...')
-        repos = self.client.get('repositories').json()
+
+        if self.repository_id is not None:
+            repo = self.client.get(f'/repositories/{self.repository_id}')
+            repos = [repo.json()] if repo else []
+        else:
+            repos = self.client.get('repositories').json()
 
         indent_size = 2
         self.resources_counter = {}
@@ -467,15 +492,16 @@ class ArcFlow:
                         except Exception as e:
                             self.log.error(f'{" " * indent_size}Error removing pending symlink {xml_file_path}: {e}')
 
-            # Tasks for processing PDFs
-            results_4 = [pool.apply_async(
-                self.task_pdf,
-                args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
-                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
+            if not self.skip_pdf_generation:
+                # Tasks for processing PDFs
+                results_4 = [pool.apply_async(
+                    self.task_pdf,
+                    args=(repo_uri, job_id, ead_id, pdf_dir, indent_size))
+                    for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
 
-            # Wait for PDF tasks to complete
-            for r in results_4:
-                r.get()
+                # Wait for PDF tasks to complete
+                for r in results_4:
+                    r.get()
 
         return
 
@@ -489,6 +515,10 @@ class ArcFlow:
             Determines which record types are checked for deletion and which
             timestamp is used as the lower bound for the delete-feed query.
         """
+        if self.skip_deleted_record_processing:
+            self.log.info('Skipping processing of records deleted in ArchivesSpace.')
+            return
+
         xml_dir = f'{self.arclight_dir}/public/xml'
         resource_dir = f'{xml_dir}/resources'
         agent_dir = f'{xml_dir}/agents'
@@ -1149,6 +1179,10 @@ class ArcFlow:
         Each record type (collections, creators) has its own timestamp so they
         can be run independently without overwriting each other's state.
         """
+        if self.skip_timestamp_update:
+            self.log.info('Skipping update of .arcflow.yml configuration file.')
+            return
+
         try:
             # Preserve timestamps for record types not processed in this run
             try:
@@ -1284,7 +1318,7 @@ class ArcFlow:
         if scope in ('creators', 'all'):
             active_timestamps.append(int(self.last_updated_creators.timestamp()))
         if self.force_update or all(t <= 0 for t in active_timestamps):
-            self.log.info('Skipping deleted record processing.')
+            self.log.info('Skipping processing of records deleted in ArchivesSpace.')
         else:
             self.process_deleted_records(scope)
 
@@ -1331,6 +1365,23 @@ def main():
         '--skip-creator-indexing',
         action='store_true',
         help='Generate creator XML files but skip Solr indexing',)
+    parser.add_argument(
+        '--skip-pdf-generation',
+        action='store_true',
+        help='Skip PDF generation and related job processing (useful for testing)',)
+    parser.add_argument(
+        '--repository-id',
+        type=int,
+        default=None,
+        help='Process only resources from the specified repository ID (useful for testing)',)
+    parser.add_argument(
+        '--skip-deleted-record-processing',
+        action='store_true',
+        help='Skip processing of records deleted in ArchivesSpace (useful for testing)',)
+    parser.add_argument(
+        '--skip-timestamp-update',
+        action='store_true',
+        help='Skip updating last updated timestamps in .arcflow.yml (useful for testing)',)
     args = parser.parse_args()
 
     # Validate mutually exclusive flags
@@ -1346,7 +1397,11 @@ def main():
         force_update=args.force_update,
         agents_only=args.agents_only,
         collections_only=args.collections_only,
-        skip_creator_indexing=args.skip_creator_indexing)
+        skip_creator_indexing=args.skip_creator_indexing,
+        skip_pdf_generation=args.skip_pdf_generation,
+        repository_id=args.repository_id,
+        skip_deleted_record_processing=args.skip_deleted_record_processing,
+        skip_timestamp_update=args.skip_timestamp_update,)
     arcflow.run()
 
 
