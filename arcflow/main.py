@@ -47,7 +47,7 @@ class ArcFlow:
     def __init__(self, arclight_dir, aspace_dir, solr_url, aspace_solr_url, ead_extra_config='', force_update=False, agents_only=False, collections_only=False, skip_creator_indexing=False):
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
-        self.batch_size = 1000
+        self.batch_size = 400
         self.arclight_dir = arclight_dir
         if ead_extra_config.strip():
             if not os.path.isfile(ead_extra_config):
@@ -577,8 +577,8 @@ class ArcFlow:
             cmd = [
                 'bundle', 'exec', 'traject',
                 '-u', self.solr_url,
-                '-s', 'processing_thread_pool=8',
-                '-s', 'solr_writer.thread_pool=8',
+                '-s', 'processing_thread_pool=16',
+                '-s', 'solr_writer.thread_pool=16',
                 '-s', f'solr_writer.batch_size={self.batch_size}',
                 '-s', 'solr_writer.commit_on_close=true',
                 '-i', 'xml',
