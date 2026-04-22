@@ -24,6 +24,10 @@ from services.agent_service import AgentService
 import glob
 
 base_dir = os.path.abspath((__file__) + "/../../")
+error_log_file = os.path.join(base_dir, 'logs/error.log')
+os.makedirs(os.path.dirname(error_log_file), mode=0o755, exist_ok=True)
+error_log_handler = logging.FileHandler(error_log_file)
+error_log_handler.setLevel(logging.CRITICAL)
 log_file = os.path.join(base_dir, 'logs/arcflow.log')
 os.makedirs(os.path.dirname(log_file), mode=0o755, exist_ok=True)
 logging.basicConfig(
@@ -33,6 +37,7 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(),
         logging.FileHandler(log_file),
+        error_log_handler,
     ]
 )
 
@@ -60,6 +65,13 @@ class ArcFlow:
             skip_deleted_record_processing=False,
             skip_timestamp_update=False,
         ):
+        # check if error_log_file is not empty and log a critical error if it is
+        # to avoid keep running ArcFlow with unresolved errors that could lead 
+        # to data integrity issues in ArcLight
+        if os.path.isfile(error_log_file) and os.path.getsize(error_log_file) > 0:
+            logging.critical(f'Critical errors occurred in the last ArcFlow run. See {error_log_file} for details, resolve the reported issues to avoid possible data integrity impacts. Once resolved, delete {error_log_file} (or rename it if you want to keep a record of past errors) so ArcFlow can resume normal operation.')
+            exit(1)
+
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
         self.batch_size = 400
@@ -110,11 +122,11 @@ class ArcFlow:
                 self.last_updated_creators = datetime.strptime(creators_ts_str, date_fmt) if creators_ts_str else epoch
             except Exception as e:
                 self.log.error(f'Error parsing last_updated date on file .arcflow.yml: {e}')
-                exit(0)
+                exit(1)
         except FileNotFoundError:
             if not self.force_update:
                 self.log.error('File .arcflow.yml not found. Create the file and try again or run with --force-update to recreate EADs from scratch.')
-                exit(0)
+                exit(1)
             else:
                 self.last_updated_collections = datetime.fromtimestamp(0, timezone.utc)
                 self.last_updated_creators = datetime.fromtimestamp(0, timezone.utc)
@@ -123,7 +135,7 @@ class ArcFlow:
                 config = yaml.safe_load(file)
         except FileNotFoundError:
             self.log.error('File .archivessnake.yml not found. Create the file.')
-            exit(0)
+            exit(1)
 
         try:
             self.client = ASnakeClient(
@@ -134,7 +146,7 @@ class ArcFlow:
             self.client.authorize()
         except Exception as e:
             self.log.error(f'Error authorizing ASnakeClient: {e}')
-            exit(0)
+            exit(1)
 
         # Initialize services
         self.xml_transform = XmlTransformService(client=self.client, log=self.log)
@@ -263,7 +275,7 @@ class ArcFlow:
             }).json()
 
         if "ead_id" not in resource:
-            self.log.error(f'Resource {resource_id} is missing an ead_id. Skipping.')
+            self.log.critical(f'Resource {resource_id} is missing an ead_id.')
             return pdf_job
         xml_file_path = f'{xml_dir}/{resource["ead_id"]}.xml'
 
@@ -579,7 +591,7 @@ class ArcFlow:
             arclight_path = result_show.stdout.strip() if result_show.returncode == 0 else ''
 
             if not arclight_path:
-                self.log.error(f'Could not find arclight gem path')
+                self.log.critical(f'Could not find arclight gem path')
                 return
 
             traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
@@ -615,13 +627,13 @@ class ArcFlow:
             )
 
             if result.returncode != 0:
-                self.log.error(f'Failed to index pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr. Return code: {result.returncode}')
+                self.log.critical(f'Failed to index pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr. Return code: {result.returncode}')
                 if result.stderr:
-                    self.log.error(result.stderr.decode("utf-8"))
+                    self.log.critical(result.stderr.decode("utf-8"))
             else:
                 self.log.info(f'Finished indexing pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr.')
         except subprocess.CalledProcessError as e:
-            self.log.error(f'Error indexing pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr: {e}')
+            self.log.critical(f'Error indexing pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr: {e}')
 
 
     def get_creator_bioghist(self, resource):
@@ -749,8 +761,8 @@ class ArcFlow:
             return response.json()['response']['docs']
 
         except requests.exceptions.RequestException as e:
-            self.log.error(f"Failed to execute Solr query: {e}")
-            self.log.error(f"  Failed query string: {query_string}")
+            self.log.critical(f"Failed to execute Solr query: {e}")
+            self.log.critical(f"  Failed query string: {query_string}")
             return []
 
     def get_all_agents(self, agent_types=None, modified_since=0):
@@ -848,9 +860,9 @@ class ArcFlow:
             return creator_id
 
         except Exception as e:
-            self.log.error(f'Error processing agent {agent_uri}: {e}')
+            self.log.critical(f'Error processing agent {agent_uri}: {e}')
             import traceback
-            self.log.error(traceback.format_exc())
+            self.log.critical(traceback.format_exc())
             return None
 
     def process_creators(self, pool):
@@ -950,9 +962,9 @@ class ArcFlow:
            return traject_config
 
         # No config found - fail
-        self.log.error('✗ Could not find eac_cpf_config.rb')
-        self.log.error(f'  Checked: {os.path.join(self.arclight_dir, "lib", "arcuit", "traject", "eac_cpf_config.rb")}')
-        self.log.error(f'  Checked: {os.path.join(arcflow_repo_root, "example_eac_cpf_config.rb")}')
+        self.log.critical('✗ Could not find eac_cpf_config.rb')
+        self.log.critical(f'  Checked: {os.path.join(self.arclight_dir, "lib", "arcuit", "traject", "eac_cpf_config.rb")}')
+        self.log.critical(f'  Checked: {os.path.join(arcflow_repo_root, "example_eac_cpf_config.rb")}')
         return None
 
 
@@ -1013,15 +1025,15 @@ class ArcFlow:
                     self.log.info(f'  Successfully indexed {len(existing_files)} creators')
                 else:
                     failed_count += len(existing_files)
-                    self.log.error(f'  Traject failed with exit code {result.returncode}')
+                    self.log.critical(f'  Traject failed with exit code {result.returncode}')
                     if result.stderr:
-                        self.log.error(f'  STDERR: {result.stderr.decode("utf-8")}')
+                        self.log.critical(f'  STDERR: {result.stderr.decode("utf-8")}')
 
             except subprocess.TimeoutExpired:
-                self.log.error(f'  Traject timed out for batch {batch_num}/{total_batches}')
+                self.log.critical(f'  Traject timed out for batch {batch_num}/{total_batches}')
                 failed_count += len(existing_files)
             except Exception as e:
-                self.log.error(f'  Error indexing batch {batch_num}/{total_batches}: {e}')
+                self.log.critical(f'  Error indexing batch {batch_num}/{total_batches}: {e}')
                 failed_count += len(existing_files)
 
         self.commit_arclight_solr()
@@ -1091,7 +1103,7 @@ class ArcFlow:
                 self.log.info(f'Saved {label} file {file_path}.')
                 return True
         except Exception as e:
-            self.log.error(f'Error writing to {label} file {file_path}: {e}')
+            self.log.critical(f'Error writing to {label} file {file_path}: {e}')
             return False
 
 
@@ -1112,10 +1124,10 @@ class ArcFlow:
                 self.log.info('Committed changes to ArcLight Solr.')
                 return True
             else:
-                self.log.error(f'Failed to commit changes to ArcLight Solr. Status code: {response.status_code}')
+                self.log.critical(f'Failed to commit changes to ArcLight Solr. Status code: {response.status_code}')
                 return False
         except requests.exceptions.RequestException as e:
-            self.log.error(f'Error committing changes to ArcLight Solr: {e}')
+            self.log.critical(f'Error committing changes to ArcLight Solr: {e}')
             return False
 
     def delete_arclight_solr_record(self, solr_record_id):
@@ -1132,7 +1144,7 @@ class ArcFlow:
                     f'Failed to delete Solr record {solr_record_id} from Arclight Solr. Status code: {response.status_code}')
                 return False
         except requests.exceptions.RequestException as e:
-            self.log.error(f'Error deleting Solr record {solr_record_id} from ArcLight Solr: {e}')
+            self.log.critical(f'Error deleting Solr record {solr_record_id} from ArcLight Solr: {e}')
 
     def delete_file(self, file_path):
         try:
@@ -1155,8 +1167,6 @@ class ArcFlow:
         deleted_solr_record = self.delete_arclight_solr_record(solr_id)
         if deleted_solr_record:
             self.delete_file(file_path)
-
-
 
     def save_config_file(self):
         """
@@ -1273,7 +1283,7 @@ class ArcFlow:
             for future in futures:
                 exc = future.exception()
                 if exc is not None:
-                    self.log.error(f'Workflow failed: {exc}')
+                    self.log.critical(f'Workflow failed: {exc}')
                     exceptions.append(exc)
             if exceptions:
                 # Raise the first exception to signal overall failure and prevent
