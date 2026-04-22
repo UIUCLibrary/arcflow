@@ -24,7 +24,7 @@ class AgentService:
         self.client = client
         self.log = log or logging.getLogger(__name__)
 
-    def get_agent_bioghist_data(self, agent_uri: str, indent_size: int = 0) -> Optional[Dict]:
+    def get_agent_bioghist_data(self, agent_uri: str) -> Optional[Dict]:
         """
         Fetch bioghist DATA for an agent.
 
@@ -36,13 +36,11 @@ class AgentService:
 
         Args:
             agent_uri: Agent URI from ArchivesSpace (e.g., '/agents/corporate_entities/123')
-            indent_size: Indentation size for logging
 
         Returns:
             dict with keys: 'agent_name', 'persistent_id', 'paragraphs'
             or None if no bioghist found or on error
         """
-        indent = ' ' * indent_size
 
         try:
             agent = self.client.get(agent_uri).json()
@@ -51,7 +49,7 @@ class AgentService:
             for note in agent.get('notes', []):
                 if note.get('jsonmodel_type') == 'note_bioghist':
                     persistent_id = note.get('persistent_id')
-                    paragraphs = self._extract_paragraphs(note, agent_uri, indent_size)
+                    paragraphs = self._extract_paragraphs(note, agent_uri)
 
                     if paragraphs:
                         return {
@@ -63,22 +61,20 @@ class AgentService:
             return None  # No bioghist
 
         except Exception as e:
-            self.log.error(f'{indent}Error fetching agent {agent_uri}: {e}')
+            self.log.error(f'Error fetching agent {agent_uri}: {e}')
             return None
 
-    def _extract_paragraphs(self, note: dict, agent_uri: str, indent_size: int = 0) -> List[str]:
+    def _extract_paragraphs(self, note: dict, agent_uri: str) -> List[str]:
         """
         Extract paragraph content from a bioghist note.
 
         Args:
             note: Note dictionary from ArchivesSpace
             agent_uri: Agent URI for logging purposes
-            indent_size: Indentation size for logging
 
         Returns:
             List of plain text paragraph strings (not wrapped in <p> tags)
         """
-        indent = ' ' * indent_size
         paragraphs = []
 
         if 'subnotes' in note:
@@ -96,7 +92,7 @@ class AgentService:
                     else:
                         # Log unexpected content type prominently
                         self.log.error(
-                            f'{indent}**ASSUMPTION VIOLATION**: Expected string or list for subnote content '
+                            f'**ASSUMPTION VIOLATION**: Expected string or list for subnote content '
                             f'in agent {agent_uri}, got {type(content).__name__}'
                         )
                         continue
@@ -108,7 +104,7 @@ class AgentService:
         # Log if persistent_id is missing
         if not note.get('persistent_id'):
             self.log.error(
-                f'{indent}**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist '
+                f'**ASSUMPTION VIOLATION**: Expected persistent_id in note_bioghist '
                 f'for agent {agent_uri}'
             )
 
