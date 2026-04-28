@@ -11,7 +11,6 @@ import logging
 import math
 import sys
 import concurrent.futures
-import glob
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
 from xml.etree import ElementTree as ET
@@ -21,7 +20,6 @@ from multiprocessing.pool import ThreadPool as Pool
 from utils.stage_classifications import extract_labels
 from services.xml_transform_service import XmlTransformService
 from services.agent_service import AgentService
-import glob
 
 base_dir = os.path.abspath((__file__) + "/../../")
 error_log_file = os.path.join(base_dir, 'logs/error.log')
@@ -52,7 +50,6 @@ class ArcFlow:
     def __init__(
             self,
             arclight_dir,
-            aspace_dir,
             solr_url,
             aspace_solr_url,
             ead_extra_config='',
@@ -64,12 +61,14 @@ class ArcFlow:
             repository_id=None,
             skip_deleted_record_processing=False,
             skip_timestamp_update=False,
+            skip_resource_processing=False,
+            skip_collection_indexing=False,
         ):
         # check if error_log_file is not empty and log a critical error if it is
         # to avoid keep running ArcFlow with unresolved errors that could lead 
         # to data integrity issues in ArcLight
         if os.path.isfile(error_log_file) and os.path.getsize(error_log_file) > 0:
-            logging.critical(f'Critical errors occurred in the last ArcFlow run. See {error_log_file} for details, resolve the reported issues to avoid possible data integrity impacts. Once resolved, delete {error_log_file} (or rename it if you want to keep a record of past errors) so ArcFlow can resume normal operation.')
+            logging.error(f'Critical errors occurred in the last ArcFlow run. See {error_log_file} for details, resolve the reported issues to avoid possible data integrity impacts. Once resolved, delete {error_log_file} (or rename it if you want to keep a record of past errors) so ArcFlow can resume normal operation.')
             exit(1)
 
         self.solr_url = solr_url
@@ -88,7 +87,6 @@ class ArcFlow:
             else:
                 self.ead_extra_config = None
                 logging.warning(f'Default ead_extra_config not found at {default_config}. Proceeding without extra config.')
-        self.aspace_jobs_dir = f'{aspace_dir}/data/shared/job_files'
         self.job_type = 'print_to_pdf_job'
         self.force_update = force_update
         self.agents_only = agents_only
@@ -98,6 +96,8 @@ class ArcFlow:
         self.repository_id = repository_id
         self.skip_deleted_record_processing = skip_deleted_record_processing
         self.skip_timestamp_update = skip_timestamp_update
+        self.skip_resource_processing = skip_resource_processing
+        self.skip_collection_indexing = skip_collection_indexing
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
@@ -267,7 +267,6 @@ class ArcFlow:
 
 
     def task_resource(self, repo, resource_id, xml_dir, pdf_dir):
-        pdf_job = (None, None, None)
         resource = self.client.get(
             f'{repo["uri"]}/resources/{resource_id}',
             params={
@@ -276,7 +275,6 @@ class ArcFlow:
 
         if "ead_id" not in resource:
             self.log.critical(f'Resource {resource_id} is missing an ead_id.')
-            return pdf_job
         xml_file_path = f'{xml_dir}/{resource["ead_id"]}.xml'
 
         # replace dots with dashes in EAD ID to avoid issues with Solr
@@ -293,6 +291,7 @@ class ArcFlow:
                     'numbered_cs': 'true',
                     'ead3': 'false',
                 })
+            repo_id = self.get_repo_id(repo)
 
             # add custom XML elements to EAD inside <archdesc level="collection">
             # (record group/subgroup labels and biographical/historical notes)
@@ -322,7 +321,13 @@ class ArcFlow:
                 xml_content = xml.content
 
             if not self.skip_pdf_generation:
-                pdf_job = (repo['uri'], self.request_pdf_job(repo['uri'], resource_id), resource['ead_id'])
+                pdf_job = self.request_pdf_job(repo['uri'], resource_id)
+                if pdf_job > 0:
+                    # pdf files pending to create are named repoID_jobID_eadID.pdf
+                    self.create_symlink(
+                        f'{pdf_dir}/{resource["ead_id"]}.pdf',
+                        f'{pdf_dir}/_{repo_id}_{pdf_job}_{resource["ead_id"]}.pdf'
+                    )
 
             # if the EAD ID was updated in ArchivesSpace,
             # delete the previous EAD in ArcLight Solr
@@ -341,13 +346,10 @@ class ArcFlow:
             self.create_symlink(
                 os.path.basename(xml_file_path),
                 f'{os.path.dirname(xml_file_path)}/{resource_id}.xml')
-
-            repo_id = self.get_repo_id(repo)
-            self.resources_counter[repo_id] += 1
-            # files pending to index are named repoID_resourceID_batch_batchNUM.xml
+            # files pending to index are named created_repoID_resourceID.xml
             self.create_symlink(
                 os.path.basename(xml_file_path),
-                f'{os.path.dirname(xml_file_path)}/{repo_id}_{resource_id}_batch_{math.ceil(self.resources_counter[repo_id]/self.batch_size)}.xml')
+                f'{os.path.dirname(xml_file_path)}/created_{repo_id}_{resource_id}.xml')
         else:
             self.delete_ead(
                 resource_id,
@@ -355,11 +357,8 @@ class ArcFlow:
                 xml_file_path,
                 f'{pdf_dir}/{resource["ead_id"]}.pdf')
 
-        # return the PDF job info for next async processing step
-        return pdf_job
 
-
-    def task_repository(self, repo, xml_dir, modified_since):
+    def task_repository(self, repo, modified_since):
         resources = self.client.get(f'{repo["uri"]}/resources',
             params={
                 'all_ids': True,
@@ -367,17 +366,21 @@ class ArcFlow:
             }
         ).json()
         repo_id = self.get_repo_id(repo)
-        self.resources_counter[repo_id] = 0
         self.log.info(f'Found {len(resources)} resources in repository ID {repo_id}.')
 
         # return the repository and its resources for next async processing step
-        return (repo, resources)
+        return (repo, resources[:3])  # limit to 5 resources per repo for testing, remove limit for production
 
 
-    def task_pdf(self, repo_uri, job_id, ead_id, pdf_dir):
+    def task_pdf(self, pdf_symlink):
+        pdf_dir, repo_id, job_id, ead_id = pdf_symlink.split('_')
+        #remove the last part of the path to get the pdf_dir
+        pdf_dir = '/'.join(pdf_dir.split('/')[:-1])
+
+        repo_uri = f'/repositories/{repo_id}'
         while True:
             job_status = self.client.get(
-                f'{repo_uri}/jobs/{job_id}').json()['status']
+                f'{repo_uri}/jobs/{job_id}').json().get('status', '')
 
             if job_status in ('completed', 'canceled', 'failed'):
                 if job_status == 'completed':
@@ -390,30 +393,15 @@ class ArcFlow:
                     self.log.error(f'ArchivesSpace {self.job_type}_{job_id} {job_status}.')
                     pdf = None
 
-                # delete to avoid accumulation of jobs in ArchivesSpace
-                response = self.client.delete(f'{repo_uri}/jobs/{job_id}')
-                if response.status_code == 200:
-                    job_dir = f'{self.aspace_jobs_dir}/{self.job_type}_{job_id}'
-                    # delete physical job directory
-                    try:
-                        shutil.rmtree(job_dir)
-                    except Exception as e:
-                        self.log.error(f'Error deleting ArchivesSpace directory "{job_dir}": {e}')
-                else:
-                    self.log.error(f'Failed to delete ArchivesSpace {self.job_type}_{job_id}. Status code: {response.status_code}')
-
                 if hasattr(pdf, 'content'):
                     pdf_content = pdf.content
                 else:
                     pdf_content = b''   # empty PDF file
 
                 os.makedirs(pdf_dir, exist_ok=True)
-                self.save_file(
-                    f'{pdf_dir}/{ead_id}.pdf',
-                    pdf_content,
-                    'PDF')
+                self.save_file(f'{pdf_dir}/{ead_id}', pdf_content, 'PDF')
+                os.replace(pdf_symlink, pdf_symlink.replace('created_', 'completed_'))
 
-                self.log.info(f'Finished processing "{ead_id}".')
                 return True
 
             self.log.info(f'Waiting for ArchivesSpace {self.job_type}_{job_id} to complete... (current status: {job_status})')
@@ -440,68 +428,56 @@ class ArcFlow:
         if self.repository_id is not None:
             repo = self.client.get(f'/repositories/{self.repository_id}')
             repos = [repo.json()] if repo else []
+            repo_wildcard = self.repository_id
         else:
             repos = self.client.get('repositories').json()
-
-        self.resources_counter = {}
+            repo_wildcard = '*'
 
         # Tasks for processing repositories
         results_1 = [pool.apply_async(
             self.task_repository,
-            args=(repo, resource_dir, modified_since))
+            args=(repo, modified_since))
             for repo in repos]
         # Collect outputs from repository tasks
         outputs_1 = [r.get() for r in results_1]
 
-        # Tasks for processing resources
-        results_2 = [pool.apply_async(
-            self.task_resource,
-            args=(repo, resource_id, resource_dir, pdf_dir))
-            for repo, resources in outputs_1 for resource_id in resources]
-        # Collect outputs from resource tasks
-        outputs_2 = [r.get() for r in results_2]
+        if not self.skip_resource_processing:
+            # Tasks for processing resources
+            results_2 = [pool.apply_async(
+                self.task_resource,
+                args=(repo, resource_id, resource_dir, pdf_dir))
+                for repo, resources in outputs_1 for resource_id in resources]
+            # Wait for indexing tasks to complete
+            for r in results_2:
+                r.get()
+        else:
+            self.log.info('Skipping processing of resources (--skip-resource-processing flag set).')
 
-        # Create batches for indexing pending resources
-        batches = []
-        for repo, resources in self.resources_counter.items():
-            num_batches = math.ceil(resources/self.batch_size)
-            for batch_num in range(1, num_batches + 1):
-                batches.append((repo, batch_num))
+        if not self.skip_collection_indexing:
+            # Tasks for indexing pending resources
+            results_3 = [pool.apply_async(
+                self.index_collections,
+                args=(self.get_repo_id(repo), resource_dir))
+                for repo in repos]
+            # Wait for indexing tasks to complete
+            for r in results_3:
+                r.get()
 
-        # Tasks for indexing pending resources
-        results_3 = [pool.apply_async(
-            self.index_collections,
-            args=(repo_id, f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml', f'{batch_num}/{len(batches)}'))
-            for repo_id, batch_num in batches]
-        # Wait for indexing tasks to complete
-        for r in results_3:
-            r.get()
-        
-        if self.commit_arclight_solr():
-            # Remove pending symlinks after indexing
-            for repo_id, batch_num in batches:
-                xml_file_pattern = f'{resource_dir}/{repo_id}_*_batch_{batch_num}.xml'
-                xml_files = glob.glob(xml_file_pattern)
-
-                for xml_file_path in xml_files:
-                    try:
-                        os.remove(xml_file_path)
-                        self.log.info(f'Removed pending symlink {xml_file_path}')
-                    except FileNotFoundError:
-                        self.log.warning(f'File not found: {xml_file_path}')
-                    except Exception as e:
-                        self.log.error(f'Error removing pending symlink {xml_file_path}: {e}')
+            self.commit_arclight_solr()
+        else:
+            self.log.info('Skipping indexing of collections (--skip-collection-indexing flag set).')
 
         if not self.skip_pdf_generation:
             # Tasks for processing PDFs
             results_4 = [pool.apply_async(
                 self.task_pdf,
-                args=(repo_uri, job_id, ead_id, pdf_dir))
-                for repo_uri, job_id, ead_id in outputs_2 if job_id is not None]
-
+                args=(pdf_entry.path,))
+                for pdf_entry in os.scandir(pdf_dir) if pdf_entry.is_symlink() and re.match(rf'created_{repo_wildcard}_.*\.pdf', pdf_entry.name)]
             # Wait for PDF tasks to complete
             for r in results_4:
                 r.get()
+        else:
+            self.log.info('Skipping PDF generation (--skip-pdf-generation flag set).')
 
         return
 
@@ -516,7 +492,7 @@ class ArcFlow:
             timestamp is used as the lower bound for the delete-feed query.
         """
         if self.skip_deleted_record_processing:
-            self.log.info('Skipping processing of records deleted in ArchivesSpace.')
+            self.log.info('Skipping processing of records deleted in ArchivesSpace. (--skip-deleted-record-processing flag set)')
             return
 
         xml_dir = f'{self.arclight_dir}/public/xml'
@@ -577,9 +553,8 @@ class ArcFlow:
             page += 1
 
 
-    def index_collections(self, repo_id, xml_file_path, batch=''):
+    def index_collections(self, repo_id, xml_dir):
         """Index collection XML files to Solr using traject."""
-        self.log.info(f'Indexing pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr...')
         try:
             # Get arclight traject config path
             result_show = subprocess.run(
@@ -595,45 +570,59 @@ class ArcFlow:
                 return
 
             traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
-            xml_files = glob.glob(xml_file_path)
 
-            if not xml_files:
-                self.log.warning(f'No files found matching pattern: {xml_file_path}')
-                return
+            batch = 0
+            while True:
+                xml_files = []
+                for xml_file in os.scandir(xml_dir):
+                    if (xml_file.is_symlink()
+                            and xml_file.name.startswith('created_')):
+                        xml_files.append(xml_file.path)
+                        if len(xml_files) >= 2: #self.batch_size:
+                            break
 
+                if len(xml_files) > 0:
+                    batch += 1
+                    self.log.info(f'Indexing batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr...')
+                else:
+                    self.log.warning(f'No pending resources found for repository ID {repo_id}. Skipping indexing.')
+                    return
 
-            cmd = [
-                'bundle', 'exec', 'traject',
-                '-u', self.solr_url,
-                '-s', 'processing_thread_pool=4',
-                '-s', 'solr_writer.thread_pool=8',
-                '-s', f'solr_writer.batch_size={self.batch_size}',
-                '-s', 'solr_writer.commit_on_close=false',
-                '-i', 'xml',
-                '-c', traject_config,
-            ]
-            if self.ead_extra_config:
-                cmd.extend(['-c', self.ead_extra_config])
-            cmd.extend(xml_files)
+                cmd = [
+                    'bundle', 'exec', 'traject',
+                    '-u', self.solr_url,
+                    '-s', 'processing_thread_pool=4',
+                    '-s', 'solr_writer.thread_pool=8',
+                    '-s', f'solr_writer.batch_size={self.batch_size}',
+                    '-s', 'solr_writer.commit_on_close=false',
+                    '-i', 'xml',
+                    '-c', traject_config,
+                ]
+                if self.ead_extra_config:
+                    cmd.extend(['-c', self.ead_extra_config])
+                cmd.extend(xml_files)
 
-            env = os.environ.copy()
-            env['REPOSITORY_ID'] = str(repo_id)
+                env = os.environ.copy()
+                env['REPOSITORY_ID'] = str(repo_id)
 
-            result = subprocess.run(
-                cmd,
-                cwd=self.arclight_dir,
-                env=env,
-                stderr=subprocess.PIPE,
-            )
+                result = subprocess.run(
+                    cmd,
+                    cwd=self.arclight_dir,
+                    env=env,
+                    stderr=subprocess.PIPE,
+                )
 
-            if result.returncode != 0:
-                self.log.critical(f'Failed to index pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr. Return code: {result.returncode}')
-                if result.stderr:
-                    self.log.critical(result.stderr.decode("utf-8"))
-            else:
-                self.log.info(f'Finished indexing pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr.')
+                if result.returncode != 0:
+                    self.log.critical(f'Failed to index batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr. Return code: {result.returncode}')
+                    if result.stderr:
+                        self.log.critical(result.stderr.decode("utf-8"))
+                        break
+                else:
+                    self.log.info(f'Finished indexing batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr.')
+                    for xml_file in xml_files:
+                       os.replace(xml_file, xml_file.replace('created_', 'completed_'))
         except subprocess.CalledProcessError as e:
-            self.log.critical(f'Error indexing pending resources in repository ID {repo_id} (batch {batch}) to ArcLight Solr: {e}')
+            self.log.critical(f'Error indexing batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
 
 
     def get_creator_bioghist(self, resource):
@@ -1175,7 +1164,7 @@ class ArcFlow:
         can be run independently without overwriting each other's state.
         """
         if self.skip_timestamp_update:
-            self.log.info('Skipping update of .arcflow.yml configuration file.')
+            self.log.info('Skipping update of .arcflow.yml configuration file. (--skip-timestamp-update flag set)')
             return
 
         try:
@@ -1378,6 +1367,16 @@ def main():
         '--skip-timestamp-update',
         action='store_true',
         help='Skip updating last updated timestamps in .arcflow.yml (useful for testing)',)
+    parser.add_argument(
+        '--skip-resource-processing',
+        action='store_true',
+        help='Skip processing of collection EADs (useful for testing)',
+    )
+    parser.add_argument(
+        '--skip-collection-indexing',
+        action='store_true',
+        help='Skip Solr indexing of collection records (useful for testing)',
+    )
     args = parser.parse_args()
 
     # Validate mutually exclusive flags
@@ -1386,7 +1385,6 @@ def main():
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
-        aspace_dir=args.aspace_dir,
         solr_url=args.solr_url,
         ead_extra_config=args.ead_extra_config,
         aspace_solr_url=args.aspace_solr_url,
@@ -1397,7 +1395,9 @@ def main():
         skip_pdf_generation=args.skip_pdf_generation,
         repository_id=args.repository_id,
         skip_deleted_record_processing=args.skip_deleted_record_processing,
-        skip_timestamp_update=args.skip_timestamp_update,)
+        skip_timestamp_update=args.skip_timestamp_update,
+        skip_resource_processing=args.skip_resource_processing,
+        skip_collection_indexing=args.skip_collection_indexing,)
     arcflow.run()
 
 
