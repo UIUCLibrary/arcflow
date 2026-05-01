@@ -328,7 +328,7 @@ class ArcFlow:
                     # pdf files pending to create are named created_repoID_jobID_eadID.pdf
                     self.create_symlink(
                         f'{pdf_dir}/{resource["ead_id"]}.pdf',
-                        f'{pdf_dir}/_{repo_id}_{pdf_job}_{resource["ead_id"]}.pdf'
+                        f'{pdf_dir}/created_{repo_id}_{pdf_job}_{resource["ead_id"]}.pdf'
                     )
 
             # if the EAD ID was updated in ArchivesSpace,
