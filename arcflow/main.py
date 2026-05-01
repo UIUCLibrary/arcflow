@@ -10,6 +10,7 @@ import re
 import logging
 import math
 import sys
+import threading
 import concurrent.futures
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
@@ -74,6 +75,7 @@ class ArcFlow:
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
         self.batch_size = 400
+        self.max_processes = 10 # more than 10 seems to exhaust the connection pool and cause errors
         self.arclight_dir = arclight_dir
         if ead_extra_config.strip():
             if not os.path.isfile(ead_extra_config):
@@ -323,7 +325,7 @@ class ArcFlow:
             if not self.skip_pdf_generation:
                 pdf_job = self.request_pdf_job(repo['uri'], resource_id)
                 if pdf_job > 0:
-                    # pdf files pending to create are named repoID_jobID_eadID.pdf
+                    # pdf files pending to create are named created_repoID_jobID_eadID.pdf
                     self.create_symlink(
                         f'{pdf_dir}/{resource["ead_id"]}.pdf',
                         f'{pdf_dir}/_{repo_id}_{pdf_job}_{resource["ead_id"]}.pdf'
@@ -369,7 +371,7 @@ class ArcFlow:
         self.log.info(f'Found {len(resources)} resources in repository ID {repo_id}.')
 
         # return the repository and its resources for next async processing step
-        return (repo, resources[:3])  # limit to 5 resources per repo for testing, remove limit for production
+        return (repo, resources)
 
 
     def task_pdf(self, pdf_symlink):
@@ -400,7 +402,7 @@ class ArcFlow:
 
                 os.makedirs(pdf_dir, exist_ok=True)
                 self.save_file(f'{pdf_dir}/{ead_id}', pdf_content, 'PDF')
-                os.replace(pdf_symlink, pdf_symlink.replace('created_', 'completed_'))
+                os.replace(pdf_symlink, pdf_symlink.replace('created_', f'{job_status}_'))
 
                 return True
 
@@ -408,7 +410,7 @@ class ArcFlow:
             time.sleep(5)
 
 
-    def process_collections(self, pool):
+    def process_collections(self, num_processes):
         """
         Update EADs in ArcLight with the latest data from resources in
         ArchivesSpace.
@@ -433,51 +435,66 @@ class ArcFlow:
             repos = self.client.get('repositories').json()
             repo_wildcard = '*'
 
-        # Tasks for processing repositories
-        results_1 = [pool.apply_async(
-            self.task_repository,
-            args=(repo, modified_since))
-            for repo in repos]
-        # Collect outputs from repository tasks
-        outputs_1 = [r.get() for r in results_1]
-
-        if not self.skip_resource_processing:
-            # Tasks for processing resources
-            results_2 = [pool.apply_async(
-                self.task_resource,
-                args=(repo, resource_id, resource_dir, pdf_dir))
-                for repo, resources in outputs_1 for resource_id in resources]
-            # Wait for indexing tasks to complete
-            for r in results_2:
-                r.get()
-        else:
-            self.log.info('Skipping processing of resources (--skip-resource-processing flag set).')
-
-        if not self.skip_collection_indexing:
-            # Tasks for indexing pending resources
-            results_3 = [pool.apply_async(
-                self.index_collections,
-                args=(self.get_repo_id(repo), resource_dir))
+        # Indexing tasks run in a separate pool to allow concurrent execution.
+        # Traject does not seems to exhaust the connection pool, unlike the other
+        # tasks when using more than max_processes across all pools
+        with (Pool(processes=num_processes) as pool, 
+                Pool(processes=self.max_processes) as indexing_pool):
+            # Tasks for processing repositories
+            results_repositories = [pool.apply_async(
+                self.task_repository,
+                args=(repo, modified_since))
                 for repo in repos]
-            # Wait for indexing tasks to complete
-            for r in results_3:
-                r.get()
+            # Collect outputs from repository tasks
+            outputs_repositories = [r.get() for r in results_repositories]
 
-            self.commit_arclight_solr()
-        else:
-            self.log.info('Skipping indexing of collections (--skip-collection-indexing flag set).')
+            resource_processing_done = threading.Event()
+            if not self.skip_resource_processing:
+                # Tasks for processing resources
+                results_resources = [pool.apply_async(
+                    self.task_resource,
+                    args=(repo, resource_id, resource_dir, pdf_dir))
+                    for repo, resources in outputs_repositories for resource_id in resources]
+            else:
+                resource_processing_done.set()
+                self.log.info('Skipping processing of resources (--skip-resource-processing flag set).')
 
-        if not self.skip_pdf_generation:
-            # Tasks for processing PDFs
-            results_4 = [pool.apply_async(
-                self.task_pdf,
-                args=(pdf_entry.path,))
-                for pdf_entry in os.scandir(pdf_dir) if pdf_entry.is_symlink() and re.match(rf'created_{repo_wildcard}_.*\.pdf', pdf_entry.name)]
-            # Wait for PDF tasks to complete
-            for r in results_4:
-                r.get()
-        else:
-            self.log.info('Skipping PDF generation (--skip-pdf-generation flag set).')
+            if not self.skip_collection_indexing:
+                results_indexing = [indexing_pool.apply_async(
+                    self.index_collections,
+                    args=(self.get_repo_id(repo), resource_dir, resource_processing_done))
+                    for repo in repos]
+            else:
+                self.log.info('Skipping indexing of collections (--skip-collection-indexing flag set).')
+
+            if not self.skip_resource_processing:
+                # Wait for resource tasks to complete
+                for r in results_resources:
+                    r.get()
+                resource_processing_done.set()
+
+            if not self.skip_collection_indexing:
+                # Wait for indexing tasks to complete
+                for r in results_indexing:
+                    r.get()
+                # commit after all indexing tasks are done to optimize performance
+                results_commit = pool.apply_async(self.commit_arclight_solr)
+
+            if not self.skip_pdf_generation:
+                # Tasks for processing PDFs
+                results_pdf = [pool.apply_async(
+                    self.task_pdf,
+                    args=(pdf_entry.path,))
+                    for pdf_entry in os.scandir(pdf_dir) if pdf_entry.is_symlink() and re.match(rf'created_{repo_wildcard}_.*\.pdf', pdf_entry.name)]
+                # Wait for PDF tasks to complete
+                for r in results_pdf:
+                    r.get()
+            else:
+                self.log.info('Skipping PDF generation (--skip-pdf-generation flag set).')
+
+            if not self.skip_collection_indexing:
+                # Wait commit to complete
+                results_commit.get()
 
         return
 
@@ -553,7 +570,7 @@ class ArcFlow:
             page += 1
 
 
-    def index_collections(self, repo_id, xml_dir):
+    def index_collections(self, repo_id, xml_dir, resource_processing_done=None):
         """Index collection XML files to Solr using traject."""
         try:
             # Get arclight traject config path
@@ -576,17 +593,21 @@ class ArcFlow:
                 xml_files = []
                 for xml_file in os.scandir(xml_dir):
                     if (xml_file.is_symlink()
-                            and xml_file.name.startswith('created_')):
+                            and xml_file.name.startswith(f'created_{repo_id}_')):
                         xml_files.append(xml_file.path)
-                        if len(xml_files) >= 2: #self.batch_size:
+                        if len(xml_files) >= self.batch_size:
                             break
 
                 if len(xml_files) > 0:
                     batch += 1
                     self.log.info(f'Indexing batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr...')
                 else:
-                    self.log.warning(f'No pending resources found for repository ID {repo_id}. Skipping indexing.')
-                    return
+                    # if no pending resources are found, check if the resource processing is still ongoing
+                    if resource_processing_done is not None and not resource_processing_done.is_set():
+                        resource_processing_done.wait(timeout=5) # wait for a signal that resource processing is done or timeout to check again for pending resources
+                        continue  # check again for pending resources after waiting
+
+                    return  # exit the loop if no pending resources are found and resource processing is done
 
                 cmd = [
                     'bundle', 'exec', 'traject',
@@ -854,7 +875,7 @@ class ArcFlow:
             self.log.critical(traceback.format_exc())
             return None
 
-    def process_creators(self, pool):
+    def process_creators(self, num_processes):
         """
         Process creator agents and generate standalone creator documents.
 
@@ -871,14 +892,15 @@ class ArcFlow:
         # Get agents to process
         agents = self.get_all_agents(modified_since=modified_since)
 
-        # Process agents in parallel
-        results_agents = [pool.apply_async(
-            self.task_agent,
-            args=(agent_uri_item, agents_dir, 1))  # Use repo_id=1
-            for agent_uri_item in agents]
+        with Pool(processes=num_processes) as pool:
+            # Process agents in parallel
+            results_agents = [pool.apply_async(
+                self.task_agent,
+                args=(agent_uri_item, agents_dir, 1))  # Use repo_id=1
+                for agent_uri_item in agents]
 
-        creator_ids = [r.get() for r in results_agents]
-        creator_ids = [cid for cid in creator_ids if cid is not None]
+            creator_ids = [r.get() for r in results_agents]
+            creator_ids = [cid for cid in creator_ids if cid is not None]
 
         self.log.info(f'Created {len(creator_ids)} creator documents.')
 
@@ -1106,11 +1128,12 @@ class ArcFlow:
             return False
 
     def commit_arclight_solr(self):
+        self.log.info('Committing changes to ArcLight Solr...')
         try:
             response = requests.get(
                 f'{self.solr_url}/update?commit=true&openSearcher=true')
             if response.status_code == 200:
-                self.log.info('Committed changes to ArcLight Solr.')
+                self.log.info('Finished committing changes to ArcLight Solr.')
                 return True
             else:
                 self.log.critical(f'Failed to commit changes to ArcLight Solr. Status code: {response.status_code}')
@@ -1187,7 +1210,7 @@ class ArcFlow:
             self.log.error(f'Error writing to file .arcflow.yml: {e}')
 
 
-    def run_collections(self, pool):
+    def run_collections(self, num_processes):
         """
         Teardown (if force_update or first run), set up directories, and
         process collection EADs.
@@ -1221,10 +1244,10 @@ class ArcFlow:
 
         os.makedirs(resource_dir, exist_ok=True)
         os.makedirs(pdf_dir, exist_ok=True)
-        self.process_collections(pool)
+        self.process_collections(num_processes)
 
 
-    def run_creators(self, pool):
+    def run_creators(self, num_processes):
         """
         Teardown (if force_update or first run), set up directories, and
         process creator agents.
@@ -1252,10 +1275,10 @@ class ArcFlow:
                 self.log.error(f'Error deleting creator records from ArcLight Solr: {e}')
 
         os.makedirs(agents_dir, exist_ok=True)
-        self.process_creators(pool)
+        self.process_creators(num_processes)
 
 
-    def run_all(self, pool):
+    def run_all(self):
         """
         Run all record-type workflows.
         Updates repository metadata, then runs all record-type workflows in parallel.
@@ -1263,10 +1286,14 @@ class ArcFlow:
         are introduced, add them here.
         """
         self.update_repositories()
-        workflows = [self.run_collections, self.run_creators]
+        # Make sure that the combined sum of num_processes across all parallel 
+        # workflows does not exceed max_processes:
+        # 9 processes for collections and 1 for creators is an empirically derived
+        # ratio based on typical processing times, but this can be adjusted as needed.
+        workflows = [(self.run_collections, 9, (self.run_creators, 1)]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
             self.log.info('Running collections and creators in parallel...')
-            futures = [executor.submit(w, pool) for w in workflows]
+            futures = [executor.submit(workflow, num_processes) for workflow, num_processes in workflows]
             concurrent.futures.wait(futures)
             exceptions = []
             for future in futures:
@@ -1284,16 +1311,15 @@ class ArcFlow:
         """
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
 
-        with Pool(processes=10) as pool:
-            if self.collections_only:
-                scope = 'collections'
-                self.run_collections(pool)
-            elif self.agents_only:
-                scope = 'creators'
-                self.run_creators(pool)
-            else:
-                scope = 'all'
-                self.run_all(pool)
+        if self.collections_only:
+            scope = 'collections'
+            self.run_collections(self.max_processes)
+        elif self.agents_only:
+            scope = 'creators'
+            self.run_creators(self.max_processes)
+        else:
+            scope = 'all'
+            self.run_all()
 
         # Skip deleted record processing on force_update or if all active
         # timestamps indicate a first run (nothing has been indexed yet).
@@ -1318,10 +1344,6 @@ def main():
         '--arclight-dir',
         required=True,
         help='Path to ArcLight installation directory',)
-    parser.add_argument(
-        '--aspace-dir',
-        required=True,
-        help='Path to ArchivesSpace installation directory',)
     parser.add_argument(
         '--force-update',
         action='store_true',
