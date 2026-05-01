@@ -1290,7 +1290,7 @@ class ArcFlow:
         # workflows does not exceed max_processes:
         # 9 processes for collections and 1 for creators is an empirically derived
         # ratio based on typical processing times, but this can be adjusted as needed.
-        workflows = [(self.run_collections, 9, (self.run_creators, 1)]
+        workflows = [(self.run_collections, 9), (self.run_creators, 1)]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
             self.log.info('Running collections and creators in parallel...')
             futures = [executor.submit(workflow, num_processes) for workflow, num_processes in workflows]
