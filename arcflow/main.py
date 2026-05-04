@@ -455,6 +455,7 @@ class ArcFlow:
             else:
                 self.log.info('Skipping processing of resources (--skip-resource-processing flag set).')
 
+            has_indexed_any = False
             if not self.skip_collection_indexing:
                 results_indexing = [pool.apply_async(
                     self.index_collections,
@@ -462,9 +463,11 @@ class ArcFlow:
                     for repo in repos]
                 # Wait for indexing tasks to complete
                 for r in results_indexing:
-                    r.get()
-                # commit after all indexing tasks are done to optimize performance
-                results_commit = pool.apply_async(self.commit_arclight_solr)
+                    if r.get() and not has_indexed_any:
+                        has_indexed_any = True
+                if has_indexed_any:
+                    # commit after all indexing tasks are done to optimize performance
+                    results_commit = pool.apply_async(self.commit_arclight_solr)
             else:
                 self.log.info('Skipping indexing of collections (--skip-collection-indexing flag set).')
 
@@ -480,7 +483,7 @@ class ArcFlow:
             else:
                 self.log.info('Skipping PDF generation (--skip-pdf-generation flag set).')
 
-            if not self.skip_collection_indexing:
+            if not self.skip_collection_indexing and has_indexed_any:
                 # Wait commit to complete
                 results_commit.get()
 
@@ -572,11 +575,12 @@ class ArcFlow:
 
             if not arclight_path:
                 self.log.critical(f'Could not find arclight gem path')
-                return
+                return False
 
             traject_config = f'{arclight_path}/lib/arclight/traject/ead2_config.rb'
 
             batch = 0
+            has_indexed_any = False
             while True:
                 xml_files = []
                 for xml_file in os.scandir(xml_dir):
@@ -590,7 +594,7 @@ class ArcFlow:
                     batch += 1
                     self.log.info(f'Indexing batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr...')
                 else:
-                    return  # exit the loop if no pending resources are found
+                    return has_indexed_any  # exit the loop if no pending resources are found
 
                 cmd = [
                     'bundle', 'exec', 'traject',
@@ -625,6 +629,8 @@ class ArcFlow:
                     self.log.info(f'Finished indexing batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr.')
                     for xml_file in xml_files:
                        os.replace(xml_file, xml_file.replace('created_', 'completed_'))
+                    if not has_indexed_any:
+                        has_indexed_any = True
         except subprocess.CalledProcessError as e:
             self.log.critical(f'Error indexing batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr: {e}')
 
