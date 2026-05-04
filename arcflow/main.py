@@ -10,7 +10,6 @@ import re
 import logging
 import math
 import sys
-import threading
 import concurrent.futures
 from xml.dom.pulldom import parse, START_ELEMENT
 from xml.sax.saxutils import escape as xml_escape
@@ -435,11 +434,7 @@ class ArcFlow:
             repos = self.client.get('repositories').json()
             repo_wildcard = '*'
 
-        # Indexing tasks run in a separate pool to allow concurrent execution.
-        # Traject does not seems to exhaust the connection pool, unlike the other
-        # tasks when using more than max_processes across all pools
-        with (Pool(processes=num_processes) as pool, 
-                Pool(processes=self.max_processes) as indexing_pool):
+        with (Pool(processes=num_processes) as pool):
             # Tasks for processing repositories
             results_repositories = [pool.apply_async(
                 self.task_repository,
@@ -448,37 +443,30 @@ class ArcFlow:
             # Collect outputs from repository tasks
             outputs_repositories = [r.get() for r in results_repositories]
 
-            resource_processing_done = threading.Event()
             if not self.skip_resource_processing:
                 # Tasks for processing resources
                 results_resources = [pool.apply_async(
                     self.task_resource,
                     args=(repo, resource_id, resource_dir, pdf_dir))
                     for repo, resources in outputs_repositories for resource_id in resources]
-            else:
-                resource_processing_done.set()
-                self.log.info('Skipping processing of resources (--skip-resource-processing flag set).')
-
-            if not self.skip_collection_indexing:
-                results_indexing = [indexing_pool.apply_async(
-                    self.index_collections,
-                    args=(self.get_repo_id(repo), resource_dir, resource_processing_done))
-                    for repo in repos]
-            else:
-                self.log.info('Skipping indexing of collections (--skip-collection-indexing flag set).')
-
-            if not self.skip_resource_processing:
                 # Wait for resource tasks to complete
                 for r in results_resources:
                     r.get()
-                resource_processing_done.set()
+            else:
+                self.log.info('Skipping processing of resources (--skip-resource-processing flag set).')
 
             if not self.skip_collection_indexing:
+                results_indexing = [pool.apply_async(
+                    self.index_collections,
+                    args=(self.get_repo_id(repo), resource_dir))
+                    for repo in repos]
                 # Wait for indexing tasks to complete
                 for r in results_indexing:
                     r.get()
                 # commit after all indexing tasks are done to optimize performance
                 results_commit = pool.apply_async(self.commit_arclight_solr)
+            else:
+                self.log.info('Skipping indexing of collections (--skip-collection-indexing flag set).')
 
             if not self.skip_pdf_generation:
                 # Tasks for processing PDFs
@@ -570,7 +558,7 @@ class ArcFlow:
             page += 1
 
 
-    def index_collections(self, repo_id, xml_dir, resource_processing_done=None):
+    def index_collections(self, repo_id, xml_dir):
         """Index collection XML files to Solr using traject."""
         try:
             # Get arclight traject config path
@@ -602,12 +590,7 @@ class ArcFlow:
                     batch += 1
                     self.log.info(f'Indexing batch {batch} with {len(xml_files)} pending resources in repository ID {repo_id} to ArcLight Solr...')
                 else:
-                    # if no pending resources are found, check if the resource processing is still ongoing
-                    if resource_processing_done is not None and not resource_processing_done.is_set():
-                        resource_processing_done.wait(timeout=5) # wait for a signal that resource processing is done or timeout to check again for pending resources
-                        continue  # check again for pending resources after waiting
-
-                    return  # exit the loop if no pending resources are found and resource processing is done
+                    return  # exit the loop if no pending resources are found
 
                 cmd = [
                     'bundle', 'exec', 'traject',
