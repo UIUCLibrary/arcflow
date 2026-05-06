@@ -1,3 +1,4 @@
 ArchivesSnake
 pyyaml
 lxml
+mssql-python
