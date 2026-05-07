@@ -1,3 +1,7 @@
+# ArcLight connection settings
+arclight:
+  baseurl: "arclight_baseurl"
+
 # Omeka connection settings
 omeka:
   baseurl: "omeka_baseurl"

@@ -37,7 +37,8 @@ class OmekaService:
         self.asnake_client = kwargs.get('asnake_client', None)
         self.dry_run_aspace = kwargs.get('dry_run_aspace', False)
         self.tmp_dir = kwargs.get('tmp_dir', '/tmp/')
-        self.base_url = kwargs['omeka']['baseurl']
+        self.omeka_base_url = kwargs['omeka']['baseurl']
+        self.arclight_base_url = kwargs['arclight']['baseurl']
         self.params = {
             'key_identity': kwargs['omeka']['key_identity'],
             'key_credential': kwargs['omeka']['key_credential'],
@@ -99,7 +100,7 @@ class OmekaService:
 
     def get(self, endpoint, params=None):
         response = self.session.get(
-            f'{self.base_url}/{endpoint}', 
+            f'{self.omeka_base_url}/{endpoint}', 
             params={**self.params, **(params or {})})
         response.raise_for_status()
         return response.json()
@@ -148,8 +149,11 @@ class OmekaService:
                 '_resolved' in digital_object['repository']):
             item_data['schema:holdingArchive'] = [{
                 'property_id': 'auto',
-                '@value': digital_object['repository']['_resolved']['name'],
-                'type': 'literal',
+                # '@value': digital_object['repository']['_resolved']['name'],
+                # 'type': 'literal',
+                'o:label': digital_object['repository']['_resolved']['name'],
+                '@id': f"{self.arclight_base_url}/{digital_object['repository']['_resolved']['uri']}",
+                'type': 'uri',
                 'is_public': self._is_public(digital_object['repository']['_resolved']),
             }]
 
@@ -161,22 +165,40 @@ class OmekaService:
                             classification_terms = self.asnake_client.get(
                                 classification['ref']
                             ).json()
-                            group_labels = labels_from_path(classification_terms['path_from_root'])
-                            for group_label in group_labels:
+                            record_group, subgroup = labels_from_path(classification_terms['path_from_root'])
+                            if record_group:
                                 item_data['dcterms:isPartOf'] = item_data.get(
                                     'dcterms:isPartOf', [])
                                 item_data['dcterms:isPartOf'].append({
                                     'property_id': 'auto',
-                                    '@value': group_label,
-                                    'type': 'literal',
+                                    # '@value': record_group,
+                                    # 'type': 'literal',
+                                    'o:label': record_group,
+                                    '@id': f'{self.arclight_base_url}/record_groups/{record_group}',
+                                    'type': 'uri',
+                                    'is_public': self._is_public(classification_terms),
+                                })
+                            if subgroup:
+                                item_data['dcterms:isPartOf'] = item_data.get(
+                                    'dcterms:isPartOf', [])
+                                item_data['dcterms:isPartOf'].append({
+                                    'property_id': 'auto',
+                                    # '@value': subgroup,
+                                    # 'type': 'literal',
+                                    'o:label': subgroup,
+                                    '@id': f'{self.arclight_base_url}/catalog?f[level][]=Collection&f[record_group_ssim][]={record_group}&f[subgroup_ssim][]={subgroup}&group=false',
+                                    'type': 'uri',
                                     'is_public': self._is_public(classification_terms),
                                 })
                     item_data['dcterms:isPartOf'] = item_data.get(
                         'dcterms:isPartOf', [])
                     item_data['dcterms:isPartOf'].append({
                         'property_id': 'auto',
-                        '@value': f'{collection["_resolved"]["ead_id"]} — {collection["_resolved"]["title"]}',
-                        'type': 'literal',
+                        # '@value': f'{collection["_resolved"]["ead_id"]} — {collection["_resolved"]["title"]}',
+                        # 'type': 'literal',
+                        'o:label': f'{collection["_resolved"]["ead_id"]} — {collection["_resolved"]["title"]}',
+                        '@id': f'{self.arclight_base_url}/catalog/{collection["_resolved"]["ead_id"].replace(".", "-")}',
+                        'type': 'uri',
                         'is_public': self._is_public(collection['_resolved']),
                     })
 
@@ -444,14 +466,14 @@ class OmekaService:
                 ('no_preview_available.png', file_unavailable)))
 
         #     response = self.session.post(
-        #         f'{self.base_url}/api/items', params=self.params, json=item_data)
+        #         f'{self.omeka_base_url}/api/items', params=self.params, json=item_data)
         # else:
         form_data.append(('data', (
             None,
             json.dumps(item_data),
             'application/json')))
         response = self.session.post(
-            f'{self.base_url}/api/items', params=self.params, files=form_data)
+            f'{self.omeka_base_url}/api/items', params=self.params, files=form_data)
 
         try:
             file_unavailable.close()
@@ -463,7 +485,7 @@ class OmekaService:
 
 
     def _update_omeka_uri(self, digital_object, omeka_id):
-        omeka_uri = f'{self.base_url}/item/{omeka_id}/uv'
+        omeka_uri = f'{self.omeka_base_url}/item/{omeka_id}/uv'
         has_omeka_uri = False
 
         for file_version in digital_object['file_versions']:
@@ -537,7 +559,7 @@ class OmekaService:
                             if file_version['is_representative']:
                                 primary_media = media_list[file_name]
                             response = self.session.patch(
-                                f'{self.base_url}/api/media/{media_list[file_name]}',
+                                f'{self.omeka_base_url}/api/media/{media_list[file_name]}',
                                 params=self.params, json=media_data)
                             response.raise_for_status()
 
@@ -558,7 +580,7 @@ class OmekaService:
                             ]
 
                             response = self.session.post(
-                                f'{self.base_url}/api/media', params=self.params, files=form_data)
+                                f'{self.omeka_base_url}/api/media', params=self.params, files=form_data)
                             response.raise_for_status()
 
                             if file_version['is_representative']:
@@ -571,7 +593,7 @@ class OmekaService:
         if soft_delete and has_children:
             for media in media_list.values():
                 response = self.session.patch(
-                    f'{self.base_url}/api/media/{media}',
+                    f'{self.omeka_base_url}/api/media/{media}',
                     params=self.params, json={
                         'o:is_public': False,
                     })
@@ -581,7 +603,7 @@ class OmekaService:
         # else:
         #     for media in media_list.values():
         #         response = self.session.delete(
-        #             f'{self.base_url}/api/media/{media}',
+        #             f'{self.omeka_base_url}/api/media/{media}',
         #             params=self.params)
         #         response.raise_for_status()
 
@@ -593,7 +615,7 @@ class OmekaService:
             }
 
         if not has_children:
-            omeka_uri = f'{self.base_url}/item/{item[0]["o:id"]}/uv'
+            omeka_uri = f'{self.omeka_base_url}/item/{item[0]["o:id"]}/uv'
             for file_version in digital_object['file_versions']:
                 if file_version['file_uri'] != omeka_uri:
                     item_data['schema:url'] = item_data.get('schema:url', [])
@@ -606,7 +628,7 @@ class OmekaService:
                     break
 
         response = self.session.patch(
-            f'{self.base_url}/api/items/{item[0]["o:id"]}',
+            f'{self.omeka_base_url}/api/items/{item[0]["o:id"]}',
             params=self.params, json=item_data)
         response.raise_for_status()
         return self._update_omeka_uri(digital_object, response.json()['o:id'])
@@ -619,7 +641,7 @@ class OmekaService:
 
         if soft_delete:
             response = self.session.patch(
-                f'{self.base_url}/api/items/{item[0]["o:id"]}',
+                f'{self.omeka_base_url}/api/items/{item[0]["o:id"]}',
                 params=self.params, json={
                     'o:is_public': False,
                 })
@@ -629,7 +651,7 @@ class OmekaService:
         # (deletes the item and all its media files permanently, so use with caution)
         # else:
         #     response = self.session.delete(
-        #         f'{self.base_url}/api/items/{item[0]["o:id"]}',
+        #         f'{self.omeka_base_url}/api/items/{item[0]["o:id"]}',
         #         params=self.params)
 
         #     response.raise_for_status()
@@ -649,7 +671,7 @@ class OmekaService:
 
                 for item in items:
                     response = self.session.patch(
-                        f'{self.base_url}/api/items/{item["o:id"]}',
+                        f'{self.omeka_base_url}/api/items/{item["o:id"]}',
                         params=self.params, json={
                             'o:is_public': False,
                         })
@@ -667,7 +689,7 @@ class OmekaService:
 
         #         for item in items:
         #             response = self.session.delete(
-        #                 f'{self.base_url}/api/items/{item["o:id"]}',
+        #                 f'{self.omeka_base_url}/api/items/{item["o:id"]}',
         #                 params=self.params)
         #             response.raise_for_status()
         #         self.log.info(f'Deleted batch of {len(items)} items found.')
