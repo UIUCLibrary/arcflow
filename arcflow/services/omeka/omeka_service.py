@@ -550,9 +550,10 @@ class OmekaService:
 
                         # if already exists in Omeka, just update the metadata
                         if (file_name in media_list):
+                            preview_type = ' (Long Preview)' if '_long_preview' in file_version["file_uri"] else ' (No Preview)' if '_no_preview' in file_version["file_uri"] else ''
                             media_data = self._prepare_media_data(
                                 is_public=self._is_public(file_version) if is_public else False,
-                                title=title,
+                                title=f'{title}{preview_type}',
                                 label=label,
                                 caption=caption,
                                 item_type='o:Media')
@@ -586,8 +587,8 @@ class OmekaService:
                             if file_version['is_representative']:
                                 primary_media = response.json()['o:id']
 
-                            if not has_children:
-                                has_children = True
+                        if not has_children:
+                            has_children = True
 
         # delete media not present in the digital object anymore
         if soft_delete and has_children:
