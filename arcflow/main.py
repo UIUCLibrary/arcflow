@@ -598,12 +598,13 @@ class ArcFlow:
         return
 
 
-    def process_deleted_records(self, scope):
+    def process_deleted_records(self, modified_since_scope):
         """
         Process records deleted in ArchivesSpace since the last run.
 
-        scope: 'collections', 'creators', 'digital_objects' or 'all'
-            Determines which record types are checked for deletion and which
+        modified_since_scope: dict with keys 'collections', 'creators', 'digital_objects' 
+            and values with the corresponding last_updated timestamp.
+            Determines which record types are checked for deletion and which 
             timestamp is used as the lower bound for the delete-feed query.
         """
         if self.skip_deleted_record_processing:
@@ -615,19 +616,15 @@ class ArcFlow:
         agent_dir = f'{xml_dir}/agents'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        # TODO: last_updated_global?
-        # Use the global timestamp when all types are in scope so no
-        # deletions are missed.  Per-type filtering happens in the loop below.
-        if scope == 'all':
-            modified_since = min(int(self.last_updated_global.timestamp()))
-        elif scope == 'collections':
-            modified_since = int(self.last_updated_collections.timestamp())
-        elif scope == 'digital_objects':
-            modified_since = int(self.last_updated_digital_objects.timestamp())
-        else:  # 'creators'
-            modified_since = int(self.last_updated_creators.timestamp())
+        # Determine the scope and modified_since timestamp for the delete-feed
+        # query based on the provided modified_since_scope
+        if len(modified_since_scope) > 1:
+            scope = 'all'
+            modified_since = min(modified_since_scope.values())
+        else:
+            scope, modified_since = next(iter(modified_since_scope.items())) 
 
-        resource_pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<record_id>\d+)$'
+        object_pattern = r'^/repositories/(?P<repo_id>\d+)/(?P<object_type>resources|digital_objects)/(?P<record_id>\d+)$'
         agent_pattern = r'^/agents/(?P<agent_type>people|corporate_entities|families)/(?P<record_id>\d+)$'
 
         page = 1
@@ -640,25 +637,27 @@ class ArcFlow:
                 }
             ).json()
             for record in deleted_records['results']:
-                resource_match = re.match(resource_pattern, record)
+                object_match = re.match(object_pattern, record)
                 agent_match = re.match(agent_pattern, record)
 
-                # if scope in ('digital_objects', 'all'): TODO: pending
-
-
-                if resource_match and scope in ('collections', 'all'):
-                    resource_id = resource_match.group('record_id')
-                    self.log.info(f'Processing deleted resource ID {resource_id}...')
-                    symlink_path = f'{resource_dir}/{resource_id}.xml'
-                    ead_id = self.get_ead_from_symlink(symlink_path)
-                    if ead_id:
-                        self.delete_ead(
-                            resource_id,
-                            ead_id.replace('.', '-'),  # dashes in Solr
-                            f'{resource_dir}/{ead_id}.xml',  # dots in filenames
-                            f'{pdf_dir}/{ead_id}.pdf')
-                    else:
-                        self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
+                if object_match and scope in ('collections', 'digital_objects','all'):
+                    object_id = object_match.group('record_id')
+                    object_type = object_match.group('object_type')
+                    if object_type == 'resources':
+                        self.log.info(f'Processing deleted resource ID {object_id}...')
+                        symlink_path = f'{resource_dir}/{object_id}.xml'
+                        ead_id = self.get_ead_from_symlink(symlink_path)
+                        if ead_id:
+                            self.delete_ead(
+                                object_id,
+                                ead_id.replace('.', '-'),  # dashes in Solr
+                                f'{resource_dir}/{ead_id}.xml',  # dots in filenames
+                                f'{pdf_dir}/{ead_id}.pdf')
+                        else:
+                            self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
+                    else: # digital_objects:
+                        self.log.info(f'Processing deleted digital object ID {object_id}...')
+                        self.omeka.delete(record)
 
                 if agent_match and scope in ('creators', 'all'):
                     agent_type = agent_match.group('agent_type')
@@ -1302,7 +1301,6 @@ class ArcFlow:
             except FileNotFoundError:
                 config = {}
             config.pop('last_updated', None)  # remove legacy single key if present
-            now = datetime.fromtimestamp(self.start_time, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S%z')
 
             if scope in ('collections', 'all'):
                 config['last_updated_collections'] = self.last_updated_collections.strftime('%Y-%m-%dT%H:%M:%S%z')
@@ -1318,18 +1316,17 @@ class ArcFlow:
             self.log.error(f'Error writing to file .arcflow.yml: {e}')
 
 
-    def run_digital_objects(self, num_processes):
+    def run_digital_objects(self, modified_since, num_processes):
         """
         Teardown (if force_update or first run), and process digital objects.
         """
-        modified_since = int(self.last_updated_digital_objects.timestamp())
         if self.force_update or modified_since <= 0:
             modified_since = 0
             self.log.info('Deleting all digital objects from Omeka...')
             self.omeka.delete_all()
         self.process_digital_objects(num_processes, modified_since)
 
-    def run_collections(self, num_processes):
+    def run_collections(self, modified_since, num_processes):
         """
         Teardown (if force_update or first run), set up directories, and
         process collection EADs.
@@ -1338,7 +1335,6 @@ class ArcFlow:
         resource_dir = f'{xml_dir}/resources'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        modified_since = int(self.last_updated_collections.timestamp())
         if self.force_update or modified_since <= 0:
             modified_since = 0
 
@@ -1369,7 +1365,7 @@ class ArcFlow:
         self.process_collections(num_processes, modified_since)
 
 
-    def run_creators(self, num_processes):
+    def run_creators(self, modified_since, num_processes):
         """
         Teardown (if force_update or first run), set up directories, and
         process creator agents.
@@ -1377,7 +1373,6 @@ class ArcFlow:
         xml_dir = f'{self.arclight_dir}/public/xml'
         agents_dir = f'{xml_dir}/agents'
 
-        modified_since = int(self.last_updated_creators.timestamp())
         if self.force_update or modified_since <= 0:
             modified_since = 0
 
@@ -1403,7 +1398,7 @@ class ArcFlow:
         self.process_creators(num_processes, modified_since)
 
 
-    def run_all(self):
+    def run_all(self, modified_since_scope):
         """
         Run all record-type workflows.
         Updates repository metadata, then runs all record-type workflows in parallel.
@@ -1415,16 +1410,19 @@ class ArcFlow:
         # Digital objects need to be processed before collections because they 
         # modify the EADs with links to digital objects, and we want those links 
         # to be present when collections are indexed.
-        self.run_digital_objects(self.max_processes)
+        self.run_digital_objects(modified_since_scope['digital_objects'], self.max_processes)
 
         # Make sure that the combined sum of num_processes across all parallel 
         # workflows does not exceed max_processes:
         # 9 processes for collections and 1 for creators is an empirically derived
         # ratio based on typical processing times, but this can be adjusted as needed.
-        workflows = [(self.run_collections, 9), (self.run_creators, 1)]
+        workflows = [
+            (self.run_collections, modified_since_scope['collections'], 9),
+            (self.run_creators, modified_since_scope['creators'], 1)
+        ]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
             self.log.info('Running collections and creators in parallel...')
-            futures = [executor.submit(workflow, num_processes) for workflow, num_processes in workflows]
+            futures = [executor.submit(workflow, modified_since, num_processes) for workflow, modified_since, num_processes in workflows]
             concurrent.futures.wait(futures)
             exceptions = []
             for future in futures:
@@ -1442,35 +1440,33 @@ class ArcFlow:
         """
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
 
+        modified_since_scope = {}
         if self.collections_only:
-            scope = 'collections'
-            self.run_collections(self.max_processes)
+            modified_since_scope['collections'] = int(self.last_updated_collections.timestamp())
+            self.run_collections(modified_since_scope['collections'], self.max_processes)
         elif self.digital_objects_only:
-            scope = 'digital_objects'
-            self.run_digital_objects(self.max_processes)
+            modified_since_scope['digital_objects'] = int(self.last_updated_digital_objects.timestamp())
+            self.run_digital_objects(modified_since_scope['digital_objects'], self.max_processes)
         elif self.agents_only:
-            scope = 'creators'
-            self.run_creators(self.max_processes)
+            modified_since_scope['creators'] = int(self.last_updated_creators.timestamp())
+            self.run_creators(modified_since_scope['creators'], self.max_processes)
         else:
-            scope = 'all'
-            self.run_all()
+            modified_since_scope = {
+                'collections': int(self.last_updated_collections.timestamp()),
+                'creators': int(self.last_updated_creators.timestamp()),
+                'digital_objects': int(self.last_updated_digital_objects.timestamp())
+            }
+            self.run_all(modified_since_scope)
 
-        # Skip deleted record processing on force_update or if all active
-        # timestamps indicate a first run (nothing has been indexed yet).
-        active_timestamps = []
-        if scope in ('collections', 'all'):
-            active_timestamps.append(int(self.last_updated_collections.timestamp()))
-        if scope in ('creators', 'all'):
-            active_timestamps.append(int(self.last_updated_creators.timestamp()))
-        if scope in ('digital_objects', 'all'):
-            active_timestamps.append(int(self.last_updated_digital_objects.timestamp()))
-
-        if self.force_update or all(t <= 0 for t in active_timestamps):
+        # Skip deleted record processing on force_update or
+        # if modified_since for the relevant scope(s) is 0 or negative, 
+        # which indicates a first run (nothing has been indexed yet).
+        if self.force_update or all(t <= 0 for t in modified_since_scope.values()):
             self.log.info('Skipping processing of records deleted in ArchivesSpace.')
         else:
-            self.process_deleted_records(scope)
+            self.process_deleted_records(modified_since_scope)
 
-        self.save_config_file(scope)
+        self.save_config_file('all' if len(modified_since_scope) > 1 else next(iter(modified_since_scope.keys())))
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
 
 
