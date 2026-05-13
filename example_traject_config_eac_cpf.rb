@@ -31,7 +31,7 @@ CREATOR_ID_PATTERN = /^creator_(#{ENTITY_TYPES.join('|')})_\d+$/
 
 settings do
   provide "solr.url", ENV['SOLR_URL'] || "http://localhost:8983/solr/blacklight-core"
-  provide "solr_writer.commit_on_close", "true"
+  provide "solr_writer.commit_on_close", "false"  # We'll commit manually after batch processing for better performance
   provide "solr_writer.thread_pool", "8"
   provide "solr_writer.batch_size", "100"
   provide "processing_thread_pool", "4"

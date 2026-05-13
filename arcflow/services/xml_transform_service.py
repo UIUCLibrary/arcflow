@@ -28,7 +28,7 @@ class XmlTransformService:
         self.client = client
         self.log = log or logging.getLogger(__name__)
 
-    def add_creator_ids_to_ead(self, ead: str, resource: dict, indent_size: int = 0) -> str:
+    def add_creator_ids_to_ead(self, ead: str, resource: dict) -> str:
         """
         Add arcuit:creator_id attributes to name elements inside <origination> elements in EAD XML.
 
@@ -41,12 +41,10 @@ class XmlTransformService:
         Args:
             ead: EAD XML as a string
             resource: ArchivesSpace resource record with resolved linked_agents
-            indent_size: Indentation size for logging
 
         Returns:
             str: Modified EAD XML string with arcuit namespace and creator_id attributes
         """
-        indent = ' ' * indent_size
 
         # Extract creator IDs from linked_agents in order
         creator_ids = []
@@ -57,7 +55,7 @@ class XmlTransformService:
                 if match:
                     creator_ids.append(f'creator_{match.group(1)}_{match.group(2)}')
                 else:
-                    self.log.warning(f'{indent}Could not parse creator ID from agent ref: {agent_ref}')
+                    self.log.warning(f'Could not parse creator ID from agent ref: {agent_ref}')
 
         if not creator_ids:
             return ead
@@ -105,7 +103,7 @@ class XmlTransformService:
                     else:
                         # No eligible name element found
                         self.log.debug(
-                            f'{indent}No eligible name element in <origination> for creator ID {creator_id}'
+                            f'No eligible name element in <origination> for creator ID {creator_id}'
                         )
 
             # Convert back to string with lxml, preserving XML declaration and namespaces
@@ -121,7 +119,7 @@ class XmlTransformService:
             return result
 
         except etree.ParseError as e:
-            self.log.error(f'{indent}Failed to parse EAD XML: {e}. Returning original content.')
+            self.log.error(f'Failed to parse EAD XML: {e}. Returning original content.')
             return ead
 
     def inject_collection_metadata(
@@ -238,7 +236,7 @@ class XmlTransformService:
             self.log.error(f'Failed to parse EAD XML: {e}. Returning original content.')
             return ead
 
-    def add_collection_links_to_eac_cpf(self, eac_cpf_xml: str, indent_size: int = 0) -> str:
+    def add_collection_links_to_eac_cpf(self, eac_cpf_xml: str) -> str:
         """
         Add <descriptiveNote><p>ead_id:{ead_id}</p></descriptiveNote> to
         <resourceRelation resourceRelationType="creatorOf"> elements in EAC-CPF XML.
@@ -249,7 +247,6 @@ class XmlTransformService:
 
         Args:
             eac_cpf_xml: EAC-CPF XML as a string
-            indent_size: Indentation size for logging
 
         Returns:
             str: Modified EAC-CPF XML string
@@ -260,8 +257,6 @@ class XmlTransformService:
         if not self.client:
             raise ValueError("Client is required for add_collection_links_to_eac_cpf operation")
 
-        indent = ' ' * indent_size
-        
         # Save the original XML to return if no changes are made
         original_xml = eac_cpf_xml
 
@@ -331,7 +326,7 @@ class XmlTransformService:
                     response = self.client.get(f'/repositories/{res_repo_id}/resources/{res_resource_id}')
                     if response.status_code != 200:
                         self.log.warning(
-                            f'{indent}Could not fetch resource {href}: HTTP {response.status_code}. '
+                            f'Could not fetch resource {href}: HTTP {response.status_code}. '
                             'Skipping collection link.')
                         continue
                     
@@ -339,7 +334,7 @@ class XmlTransformService:
                     ead_id = resource.get('ead_id')
                     if not ead_id:
                         self.log.warning(
-                            f'{indent}Resource /repositories/{res_repo_id}/resources/{res_resource_id} '
+                            f'Resource /repositories/{res_repo_id}/resources/{res_resource_id} '
                             'has no ead_id. Skipping collection link.')
                         continue
                     
@@ -353,7 +348,7 @@ class XmlTransformService:
                     changes_made = True
                     
                 except Exception as e:
-                    self.log.warning(f'{indent}Could not fetch resource for {href}: {e}. Skipping collection link.')
+                    self.log.warning(f'Could not fetch resource for {href}: {e}. Skipping collection link.')
                     continue
             
             # Only convert back to string if changes were made
@@ -372,7 +367,7 @@ class XmlTransformService:
                 return original_xml
             
         except etree.ParseError as e:
-            self.log.error(f'{indent}Failed to parse EAC-CPF XML: {e}. Returning original content.')
+            self.log.error(f'Failed to parse EAC-CPF XML: {e}. Returning original content.')
             return original_xml
 
     def build_bioghist_element(
@@ -412,20 +407,17 @@ class XmlTransformService:
         # Convert to string (no XML declaration for fragments)
         return etree.tostring(bioghist, encoding='unicode', method='xml')
 
-    def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str, indent_size: int = 0) -> Optional['etree._Element']:
+    def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str) -> Optional['etree._Element']:
         """
         Parse and validate EAC-CPF XML structure.
 
         Args:
             eac_cpf_xml: EAC-CPF XML as a string
             agent_uri: Agent URI for logging purposes
-            indent_size: Indentation size for logging
 
         Returns:
             lxml Element if valid, None if parsing fails
         """
-        indent = ' ' * indent_size
-
         try:
             # Try to parse with lxml, with fallback for missing xlink namespace
             parser = etree.XMLParser(remove_blank_text=False)
@@ -438,8 +430,8 @@ class XmlTransformService:
                     eac_cpf_xml = eac_cpf_xml.replace('<eac-cpf>', '<eac-cpf xmlns:xlink="http://www.w3.org/1999/xlink">', 1)
                 root = etree.fromstring(eac_cpf_xml.encode('utf-8'), parser)
             
-            self.log.debug(f'{indent}Parsed EAC-CPF XML root element: {root.tag}')
+            self.log.debug(f'Parsed EAC-CPF XML root element: {root.tag}')
             return root
         except etree.ParseError as e:
-            self.log.error(f'{indent}Failed to parse EAC-CPF XML for {agent_uri}: {e}')
+            self.log.error(f'Failed to parse EAC-CPF XML for {agent_uri}: {e}')
             return None
