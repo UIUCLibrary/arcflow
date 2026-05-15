@@ -302,7 +302,8 @@ class OmekaService:
 
                 return row[0], BytesIO(row[1]), BytesIO(row[2])
 
-            return None, None, None
+            self.log.error(f'Skipping importing file "{file_name}" from Archon database {self.archon[repo_id]["database"]}: file not found in the database.')
+            return 0, None, None
 
 
     def _prepare_media_data(self, **kwargs):
