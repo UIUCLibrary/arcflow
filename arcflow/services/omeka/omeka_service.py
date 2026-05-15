@@ -341,9 +341,11 @@ class OmekaService:
     def create(self, digital_object):
         item_data = self._prepare_item_data(digital_object)
         form_data = []
+        digital_object_id = None
         if ('tree' in digital_object and
                 '_resolved' in digital_object['tree']):
             i=0
+            digital_object_id = digital_object['tree']['_resolved']['id']
             for child in digital_object['tree']['_resolved']['children']:
                 # resolved does not include label, so we need to get the 
                 # digital object component record for each child to get those values
@@ -441,18 +443,13 @@ class OmekaService:
                             i += 1
 
         # Only digital objects containing digital object components with files
-        # will be created in Omeka (only items with media files)
+        # or digital objects without components and without a file version 
+        # (existing url) will be created in Omeka (only items with media files)
         if not form_data:
-            # return None
-
             for file_version in digital_object['file_versions']:
-                item_data['schema:url'] = item_data.get('schema:url', [])
-                item_data['schema:url'].append({
-                    'property_id': 'auto',
-                    '@id': file_version['file_uri'],
-                    'type': 'uri',
-                    'is_public': self._is_public(file_version),
-                })
+                if file_version['file_uri']:
+                    self.log.info(f'Skipping creation of Omeka item for digital object ID {digital_object_id}: available at {file_version["file_uri"]}.')
+                    return None
 
             try:
                 file_unavailable = open(os.path.join(os.path.abspath((__file__) + "/../"), 'no_preview_available.png'), 'rb')
@@ -465,9 +462,6 @@ class OmekaService:
             form_data.append((f'file[0]',
                 ('no_preview_available.png', file_unavailable)))
 
-        #     response = self.session.post(
-        #         f'{self.omeka_base_url}/api/items', params=self.params, json=item_data)
-        # else:
         form_data.append(('data', (
             None,
             json.dumps(item_data),

@@ -312,7 +312,8 @@ class ArcFlow:
             }).json()
         self.log.info(f'Processing digital object ID {digital_object_id}...')
         omeka_uri = self.omeka.upsert(digital_object)
-        self.log.info(f'Omeka item for digital object ID {digital_object_id}: {omeka_uri}.')
+        if omeka_uri:
+            self.log.info(f'Omeka item for digital object ID {digital_object_id}: {omeka_uri}.')
 
 
     def task_resource(self, repo, resource_id, xml_dir, pdf_dir):
