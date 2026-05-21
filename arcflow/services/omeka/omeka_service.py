@@ -61,14 +61,6 @@ class OmekaService:
             self.log.error('File enumerations.yml not found.')
             exit(0)
 
-        if not hasattr(self, 'session'):
-            self.session = requests.Session()
-
-
-    def __del__(self):
-        if hasattr(self, 'session'):
-            self.session.close()
-
 
     def _parse_date(self, date_obj):
         label_value = date_obj.get('label', '')
@@ -100,11 +92,12 @@ class OmekaService:
 
 
     def get(self, endpoint, params=None):
-        response = self.session.get(
-            f'{self.omeka_local_url}/{endpoint}', 
-            params={**self.params, **(params or {})})
-        response.raise_for_status()
-        return response.json()
+        with requests.Session() as session:
+            response = session.get(
+                f'{self.omeka_local_url}/{endpoint}', 
+                params={**self.params, **(params or {})})
+            response.raise_for_status()
+            return response.json()
 
 
     def _is_public(self, obj):
@@ -468,8 +461,9 @@ class OmekaService:
             None,
             json.dumps(item_data),
             'application/json')))
-        response = self.session.post(
-            f'{self.omeka_local_url}/api/items', params=self.params, files=form_data)
+        with requests.Session() as session:
+            response = session.post(f'{self.omeka_local_url}/api/items', 
+                params=self.params, files=form_data)
 
         try:
             file_unavailable.close()
@@ -529,109 +523,110 @@ class OmekaService:
         media_list = {media['o:source']: media['o:id'] for media in media_sources}
         primary_media = None
 
-        has_children = False
-        if ('tree' in digital_object and
-                '_resolved' in digital_object['tree']):
-            for child in digital_object['tree']['_resolved']['children']:
-                # resolved does not include label, so we need to get the 
-                # digital object component record for each child to get those values
-                digital_object_component = self.asnake_client.get(
-                    child['record_uri']
-                ).json()
-                title = digital_object_component.get('title', '')
-                label = digital_object_component.get('label', '')
-                is_public = self._is_public(digital_object_component)
-                for file_version in child['file_versions']:
-                    if ('file_format_version' in file_version):
-                        file_name = f'{file_version["file_format_version"]}_{file_version["file_uri"]}'
-                        file_path = f'{self.tmp_dir}{file_name}'
-                        caption = file_version.get('caption', '')
+        with requests.Session() as session:
+            has_children = False
+            if ('tree' in digital_object and
+                    '_resolved' in digital_object['tree']):
+                for child in digital_object['tree']['_resolved']['children']:
+                    # resolved does not include label, so we need to get the 
+                    # digital object component record for each child to get those values
+                    digital_object_component = self.asnake_client.get(
+                        child['record_uri']
+                    ).json()
+                    title = digital_object_component.get('title', '')
+                    label = digital_object_component.get('label', '')
+                    is_public = self._is_public(digital_object_component)
+                    for file_version in child['file_versions']:
+                        if ('file_format_version' in file_version):
+                            file_name = f'{file_version["file_format_version"]}_{file_version["file_uri"]}'
+                            file_path = f'{self.tmp_dir}{file_name}'
+                            caption = file_version.get('caption', '')
 
-                        # if already exists in Omeka, just update the metadata
-                        if (file_name in media_list):
-                            preview_type = ' (Long Preview)' if '_long_preview' in file_version["file_uri"] else ' (No Preview)' if '_no_preview' in file_version["file_uri"] else ''
-                            media_data = self._prepare_media_data(
-                                is_public=self._is_public(file_version) if is_public else False,
-                                title=f'{title}{preview_type}',
-                                label=label,
-                                caption=caption,
-                                item_type='o:Media')
-                            if file_version['is_representative']:
-                                primary_media = media_list[file_name]
-                            response = self.session.patch(
-                                f'{self.omeka_local_url}/api/media/{media_list[file_name]}',
-                                params=self.params, json=media_data)
-                            response.raise_for_status()
+                            # if already exists in Omeka, just update the metadata
+                            if (file_name in media_list):
+                                preview_type = ' (Long Preview)' if '_long_preview' in file_version["file_uri"] else ' (No Preview)' if '_no_preview' in file_version["file_uri"] else ''
+                                media_data = self._prepare_media_data(
+                                    is_public=self._is_public(file_version) if is_public else False,
+                                    title=f'{title}{preview_type}',
+                                    label=label,
+                                    caption=caption,
+                                    item_type='o:Media')
+                                if file_version['is_representative']:
+                                    primary_media = media_list[file_name]
+                                response = session.patch(
+                                    f'{self.omeka_local_url}/api/media/{media_list[file_name]}',
+                                    params=self.params, json=media_data)
+                                response.raise_for_status()
 
-                            media_list.pop(file_name)
+                                media_list.pop(file_name)
 
-                        # if not, create a new media
-                        elif (os.path.isfile(file_path)):
-                            media_data = self._prepare_media_data(
-                                file_index=0,
-                                item_id=item[0]['o:id'],
-                                is_public=self._is_public(file_version) if is_public else False,
-                                title=title,
-                                label=label,
-                                caption=caption)
-                            form_data = [
-                                (f'file[0]', (file_name, open(file_path, 'rb'))),
-                                ('data', (None, json.dumps(media_data), 'application/json')),
-                            ]
+                            # if not, create a new media
+                            elif (os.path.isfile(file_path)):
+                                media_data = self._prepare_media_data(
+                                    file_index=0,
+                                    item_id=item[0]['o:id'],
+                                    is_public=self._is_public(file_version) if is_public else False,
+                                    title=title,
+                                    label=label,
+                                    caption=caption)
+                                form_data = [
+                                    (f'file[0]', (file_name, open(file_path, 'rb'))),
+                                    ('data', (None, json.dumps(media_data), 'application/json')),
+                                ]
 
-                            response = self.session.post(
-                                f'{self.omeka_local_url}/api/media', params=self.params, files=form_data)
-                            response.raise_for_status()
+                                response = session.post(
+                                    f'{self.omeka_local_url}/api/media', params=self.params, files=form_data)
+                                response.raise_for_status()
 
-                            if file_version['is_representative']:
-                                primary_media = response.json()['o:id']
+                                if file_version['is_representative']:
+                                    primary_media = response.json()['o:id']
 
-                        if not has_children:
-                            has_children = True
+                            if not has_children:
+                                has_children = True
 
-        # delete media not present in the digital object anymore
-        if soft_delete and has_children:
-            for media in media_list.values():
-                response = self.session.patch(
-                    f'{self.omeka_local_url}/api/media/{media}',
-                    params=self.params, json={
-                        'o:is_public': False,
-                    })
-                response.raise_for_status()
-        # uncomment the following lines for hard delete in Omeka 
-        # (delete media files permanently, so use with caution)
-        # else:
-        #     for media in media_list.values():
-        #         response = self.session.delete(
-        #             f'{self.omeka_local_url}/api/media/{media}',
-        #             params=self.params)
-        #         response.raise_for_status()
+            # delete media not present in the digital object anymore
+            if soft_delete and has_children:
+                for media in media_list.values():
+                    response = session.patch(
+                        f'{self.omeka_local_url}/api/media/{media}',
+                        params=self.params, json={
+                            'o:is_public': False,
+                        })
+                    response.raise_for_status()
+            # uncomment the following lines for hard delete in Omeka 
+            # (delete media files permanently, so use with caution)
+            # else:
+            #     for media in media_list.values():
+            #         response = session.delete(
+            #             f'{self.omeka_local_url}/api/media/{media}',
+            #             params=self.params)
+            #         response.raise_for_status()
 
-        # update the item metadata
-        item_data = self._prepare_item_data(digital_object)
-        if primary_media:
-            item_data['o:primary_media'] = {
-                'o:id': primary_media
-            }
+            # update the item metadata
+            item_data = self._prepare_item_data(digital_object)
+            if primary_media:
+                item_data['o:primary_media'] = {
+                    'o:id': primary_media
+                }
 
-        if not has_children:
-            omeka_uri = f'{self.omeka_public_url}/item/{item[0]["o:id"]}/uv'
-            for file_version in digital_object['file_versions']:
-                if file_version['file_uri'] != omeka_uri:
-                    item_data['schema:url'] = item_data.get('schema:url', [])
-                    item_data['schema:url'].append({
-                        'property_id': 'auto',
-                        '@id': file_version['file_uri'],
-                        'type': 'uri',
-                        'is_public': self._is_public(file_version),
-                    })
-                    break
+            if not has_children:
+                omeka_uri = f'{self.omeka_public_url}/item/{item[0]["o:id"]}/uv'
+                for file_version in digital_object['file_versions']:
+                    if file_version['file_uri'] != omeka_uri:
+                        item_data['schema:url'] = item_data.get('schema:url', [])
+                        item_data['schema:url'].append({
+                            'property_id': 'auto',
+                            '@id': file_version['file_uri'],
+                            'type': 'uri',
+                            'is_public': self._is_public(file_version),
+                        })
+                        break
 
-        response = self.session.patch(
-            f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
-            params=self.params, json=item_data)
-        response.raise_for_status()
-        return self._update_omeka_uri(digital_object, response.json()['o:id'])
+            response = session.patch(
+                f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
+                params=self.params, json=item_data)
+            response.raise_for_status()
+            return self._update_omeka_uri(digital_object, response.json()['o:id'])
 
 
     def delete(self, digital_object_uri, soft_delete=True):
@@ -639,58 +634,60 @@ class OmekaService:
         if not item:
             return None
 
-        if soft_delete:
-            response = self.session.patch(
-                f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
-                params=self.params, json={
-                    'o:is_public': False,
-                })
-            response.raise_for_status()
-            return response.status_code == 200
-        # uncomment the following lines for hard delete in Omeka 
-        # (deletes the item and all its media files permanently, so use with caution)
-        # else:
-        #     response = self.session.delete(
-        #         f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
-        #         params=self.params)
+        with requests.Session() as session:
+            if soft_delete:
+                response = session.patch(
+                    f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
+                    params=self.params, json={
+                        'o:is_public': False,
+                    })
+                response.raise_for_status()
+                return response.status_code == 200
+            # uncomment the following lines for hard delete in Omeka 
+            # (deletes the item and all its media files permanently, so use with caution)
+            # else:
+            #     response = session.delete(
+            #         f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
+            #         params=self.params)
 
-        #     response.raise_for_status()
-        #     return response.status_code == 204
+            #     response.raise_for_status()
+            #     return response.status_code == 204
 
 
     def delete_all(self, soft_delete=True):
-        if soft_delete:
-            page = 1
-            while True:
-                items = self.get('api/items',
-                    params={
-                        'page': page,
-                    })
-                if not items:
-                    break
-
-                for item in items:
-                    response = self.session.patch(
-                        f'{self.omeka_local_url}/api/items/{item["o:id"]}',
-                        params=self.params, json={
-                            'o:is_public': False,
+        with requests.Session() as session:
+            if soft_delete:
+                page = 1
+                while True:
+                    items = self.get('api/items',
+                        params={
+                            'page': page,
                         })
-                    response.raise_for_status()
-                self.log.info(f'Soft deleted batch of {len(items)} items found.')
+                    if not items:
+                        break
 
-                page += 1
-        # uncomment the following lines for hard delete in Omeka 
-        # (deletes all items and their media files permanently, so use with caution)
-        # else:
-        #     while True:
-        #         items = self.get('api/items')
-        #         if not items:
-        #             break
+                    for item in items:
+                        response = session.patch(
+                            f'{self.omeka_local_url}/api/items/{item["o:id"]}',
+                            params=self.params, json={
+                                'o:is_public': False,
+                            })
+                        response.raise_for_status()
+                    self.log.info(f'Soft deleted batch of {len(items)} items found.')
 
-        #         for item in items:
-        #             response = self.session.delete(
-        #                 f'{self.omeka_local_url}/api/items/{item["o:id"]}',
-        #                 params=self.params)
-        #             response.raise_for_status()
-        #         self.log.info(f'Deleted batch of {len(items)} items found.')
+                    page += 1
+            # uncomment the following lines for hard delete in Omeka 
+            # (deletes all items and their media files permanently, so use with caution)
+            # else:
+            #     while True:
+            #         items = self.get('api/items')
+            #         if not items:
+            #             break
+
+            #         for item in items:
+            #             response = session.delete(
+            #                 f'{self.omeka_local_url}/api/items/{item["o:id"]}',
+            #                 params=self.params)
+            #             response.raise_for_status()
+            #         self.log.info(f'Deleted batch of {len(items)} items found.')
 
