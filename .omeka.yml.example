@@ -1,10 +1,11 @@
 # ArcLight connection settings
 arclight:
-  baseurl: "arclight_baseurl"
+  public_url: "arclight_public_url"
 
 # Omeka connection settings
 omeka:
-  baseurl: "omeka_baseurl"
+  public_url: "omeka_public_url"
+  local_url: "omeka_local_url"
   key_identity: "omeka_api_key_identity"
   key_credential: "omeka_api_key_credential"
 
