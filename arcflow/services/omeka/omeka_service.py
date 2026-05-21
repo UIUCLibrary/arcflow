@@ -492,7 +492,7 @@ class OmekaService:
             digital_object['file_versions'].append({
                 'file_uri': omeka_uri,
                 'publish': self._is_public(digital_object),
-                'is_representative': True,
+                'is_representative': self._is_public(digital_object),
                 'jsonmodel_type': 'file_version',
             })
 
@@ -501,6 +501,9 @@ class OmekaService:
                 json={
                     **digital_object
                 }).json()
+
+            if 'error' in updated_object:
+                return updated_object
 
         return omeka_uri
 
