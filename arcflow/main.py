@@ -77,7 +77,7 @@ class ArcFlow:
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
         self.batch_size = 400
-        self.max_processes = 10 # more than 10 seems to exhaust the connection pool and cause errors
+        self.max_processes = 4 # more than 10 seems to exhaust the connection pool and cause errors. 4 is an empirically derived number that seems to work well based on the amount of memory and CPU power of the server, but this can be adjusted as needed.
         self.arclight_dir = arclight_dir
         if ead_extra_config.strip():
             if not os.path.isfile(ead_extra_config):
@@ -1415,10 +1415,12 @@ class ArcFlow:
 
         # Make sure that the combined sum of num_processes across all parallel 
         # workflows does not exceed max_processes:
-        # 9 processes for collections and 1 for creators is an empirically derived
-        # ratio based on typical processing times, but this can be adjusted as needed.
+        # 3 processes for collections and 1 for creators is an empirically derived
+        # ratio based on typical processing times, amount of memory and CPU power of the server.
+        # Adjust as needed based on your environment and data.
+        # but this can be adjusted as needed.
         workflows = [
-            (self.run_collections, modified_since_scope['collections'], 9),
+            (self.run_collections, modified_since_scope['collections'], 3),
             (self.run_creators, modified_since_scope['creators'], 1)
         ]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
