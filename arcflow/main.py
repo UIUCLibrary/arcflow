@@ -1324,7 +1324,7 @@ class ArcFlow:
         if self.force_update or modified_since <= 0:
             modified_since = 0
             self.log.info('Deleting all digital objects from Omeka...')
-            self.omeka.delete_all()
+            self.omeka.delete_all(soft_delete=True) # soft delete to allow for potential recovery if something goes wrong
         self.process_digital_objects(num_processes, modified_since)
 
     def run_collections(self, modified_since, num_processes):

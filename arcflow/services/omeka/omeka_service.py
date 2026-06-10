@@ -511,7 +511,7 @@ class OmekaService:
         })
 
 
-    def upsert(self, digital_object, soft_delete=True):
+    def upsert(self, digital_object, soft_delete=False):
         item = self.read(digital_object['uri'])
         if not item:
             return self.create(digital_object)
@@ -585,22 +585,23 @@ class OmekaService:
                                 has_children = True
 
             # delete media not present in the digital object anymore
-            if soft_delete and has_children:
-                for media in media_list.values():
-                    response = session.patch(
-                        f'{self.omeka_local_url}/api/media/{media}',
-                        params=self.params, json={
-                            'o:is_public': False,
-                        })
-                    response.raise_for_status()
-            # uncomment the following lines for hard delete in Omeka 
-            # (delete media files permanently, so use with caution)
-            # else:
-            #     for media in media_list.values():
-            #         response = session.delete(
-            #             f'{self.omeka_local_url}/api/media/{media}',
-            #             params=self.params)
-            #         response.raise_for_status()
+            if has_children:
+                if soft_delete:
+                    for media in media_list.values():
+                        response = session.patch(
+                            f'{self.omeka_local_url}/api/media/{media}',
+                            params=self.params, json={
+                                'o:is_public': False,
+                            })
+                        response.raise_for_status()
+                # uncomment the following lines for hard delete in Omeka
+                # (delete media files permanently, so use with caution)
+                else:
+                    for media in media_list.values():
+                        response = session.delete(
+                            f'{self.omeka_local_url}/api/media/{media}',
+                            params=self.params)
+                        response.raise_for_status()
 
             # update the item metadata
             item_data = self._prepare_item_data(digital_object)
@@ -629,7 +630,7 @@ class OmekaService:
             return self._update_omeka_uri(digital_object, response.json()['o:id'])
 
 
-    def delete(self, digital_object_uri, soft_delete=True):
+    def delete(self, digital_object_uri, soft_delete=False):
         item = self.read(digital_object_uri)
         if not item:
             return None
@@ -645,16 +646,15 @@ class OmekaService:
                 return response.status_code == 200
             # uncomment the following lines for hard delete in Omeka 
             # (deletes the item and all its media files permanently, so use with caution)
-            # else:
-            #     response = session.delete(
-            #         f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
-            #         params=self.params)
+            else:
+                response = session.delete(
+                    f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
+                    params=self.params)
+                response.raise_for_status()
+                return response.status_code == 204
 
-            #     response.raise_for_status()
-            #     return response.status_code == 204
 
-
-    def delete_all(self, soft_delete=True):
+    def delete_all(self, soft_delete=False):
         with requests.Session() as session:
             if soft_delete:
                 page = 1
@@ -678,16 +678,16 @@ class OmekaService:
                     page += 1
             # uncomment the following lines for hard delete in Omeka 
             # (deletes all items and their media files permanently, so use with caution)
-            # else:
-            #     while True:
-            #         items = self.get('api/items')
-            #         if not items:
-            #             break
+            else:
+                while True:
+                    items = self.get('api/items')
+                    if not items:
+                        break
 
-            #         for item in items:
-            #             response = session.delete(
-            #                 f'{self.omeka_local_url}/api/items/{item["o:id"]}',
-            #                 params=self.params)
-            #             response.raise_for_status()
-            #         self.log.info(f'Deleted batch of {len(items)} items found.')
+                    for item in items:
+                        response = session.delete(
+                            f'{self.omeka_local_url}/api/items/{item["o:id"]}',
+                            params=self.params)
+                        response.raise_for_status()
+                    self.log.info(f'Deleted batch of {len(items)} items found.')
 
