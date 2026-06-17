@@ -20,6 +20,7 @@ from multiprocessing.pool import ThreadPool as Pool
 from utils.stage_classifications import extract_labels
 from services.xml_transform_service import XmlTransformService
 from services.agent_service import AgentService
+from services.omeka.omeka_service import OmekaService
 
 base_dir = os.path.abspath((__file__) + "/../../")
 error_log_file = os.path.join(base_dir, 'logs/error.log')
@@ -56,6 +57,7 @@ class ArcFlow:
             force_update=False,
             agents_only=False,
             collections_only=False,
+            digital_objects_only=False,
             skip_creator_indexing=False,
             skip_pdf_generation=False,
             repository_id=None,
@@ -63,6 +65,7 @@ class ArcFlow:
             skip_timestamp_update=False,
             skip_resource_processing=False,
             skip_collection_indexing=False,
+            dry_run_aspace=False,
         ):
         # check if error_log_file is not empty and log a critical error if it is
         # to avoid keep running ArcFlow with unresolved errors that could lead 
@@ -74,7 +77,7 @@ class ArcFlow:
         self.solr_url = solr_url
         self.aspace_solr_url = aspace_solr_url
         self.batch_size = 400
-        self.max_processes = 10 # more than 10 seems to exhaust the connection pool and cause errors
+        self.max_processes = 4 # more than 10 seems to exhaust the connection pool and cause errors. 4 is an empirically derived number that seems to work well based on the amount of memory and CPU power of the server, but this can be adjusted as needed.
         self.arclight_dir = arclight_dir
         if ead_extra_config.strip():
             if not os.path.isfile(ead_extra_config):
@@ -92,6 +95,7 @@ class ArcFlow:
         self.force_update = force_update
         self.agents_only = agents_only
         self.collections_only = collections_only
+        self.digital_objects_only = digital_objects_only
         self.skip_creator_indexing = skip_creator_indexing
         self.skip_pdf_generation = skip_pdf_generation
         self.repository_id = repository_id
@@ -99,10 +103,12 @@ class ArcFlow:
         self.skip_timestamp_update = skip_timestamp_update
         self.skip_resource_processing = skip_resource_processing
         self.skip_collection_indexing = skip_collection_indexing
+        self.dry_run_aspace = dry_run_aspace
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
         self.arcflow_file_path = os.path.join(base_dir, '.arcflow.yml')
+        self.omeka_file_path = os.path.join(base_dir, '.omeka.yml')
         if self.is_running():
             self.log.info(f'ArcFlow process previously started still running. Exiting (PID: {self.pid}).')
             exit(0)
@@ -119,8 +125,10 @@ class ArcFlow:
                 legacy_ts = config.get('last_updated')
                 collections_ts_str = config.get('last_updated_collections') or legacy_ts
                 creators_ts_str = config.get('last_updated_creators') or legacy_ts
+                digital_objects_ts_str = config.get('last_updated_digital_objects') or legacy_ts
                 self.last_updated_collections = datetime.strptime(collections_ts_str, date_fmt) if collections_ts_str else epoch
                 self.last_updated_creators = datetime.strptime(creators_ts_str, date_fmt) if creators_ts_str else epoch
+                self.last_updated_digital_objects = datetime.strptime(digital_objects_ts_str, date_fmt) if digital_objects_ts_str else epoch
             except Exception as e:
                 self.log.error(f'Error parsing last_updated date on file .arcflow.yml: {e}')
                 exit(1)
@@ -131,13 +139,21 @@ class ArcFlow:
             else:
                 self.last_updated_collections = datetime.fromtimestamp(0, timezone.utc)
                 self.last_updated_creators = datetime.fromtimestamp(0, timezone.utc)
+                self.last_updated_digital_objects = datetime.fromtimestamp(0, timezone.utc)
+
+        # Use the oldest of the run timestamps so that a repo change
+        # is detected regardless of which pipeline last ran.
+        self.last_updated_global = min(
+            self.last_updated_collections,
+            self.last_updated_creators,
+            self.last_updated_digital_objects)
+
         try:
             with open(os.path.join(base_dir, '.archivessnake.yml'), 'r') as file:
                 config = yaml.safe_load(file)
         except FileNotFoundError:
             self.log.error('File .archivessnake.yml not found. Create the file.')
             exit(1)
-
         try:
             self.client = ASnakeClient(
                 username=config['username'],
@@ -150,6 +166,24 @@ class ArcFlow:
             exit(1)
 
         # Initialize services
+        try:
+            with open(self.omeka_file_path, 'r') as file:
+                config = yaml.safe_load(file)
+                self.use_archon = config.get('use_archon', 0)
+        except FileNotFoundError:
+            self.log.error('File .omeka.yml not found. Create the file.')
+            exit(1)
+        try:
+            self.omeka = OmekaService(
+                **config,
+                log=self.log,
+                asnake_client = self.client,
+                dry_run_aspace = self.dry_run_aspace,
+            )
+        except Exception as e:
+            self.log.error(f'Error initializing OmekaClient: {e}')
+            exit(1)
+
         self.xml_transform = XmlTransformService(client=self.client, log=self.log)
         self.agent_service = AgentService(client=self.client, log=self.log)
 
@@ -190,16 +224,13 @@ class ArcFlow:
             self.log.info('Checking for updates on repositories information...')
 
             update_repos = False
-            # Use the oldest of the two run timestamps so that a repo change
-            # is detected regardless of which pipeline last ran.
-            last_updated = min(self.last_updated_collections, self.last_updated_creators)
             for repo in repos:
                 # python doesn't support Zulu timezone suffixes,
                 # converting system_mtime and user_mtime to UTC offset notation
-                if (last_updated <= datetime.strptime(
+                if (self.last_updated_global <= datetime.strptime(
                         repo['system_mtime'].replace('Z','+0000'),
                         '%Y-%m-%dT%H:%M:%S%z')
-                        or last_updated <= datetime.strptime(
+                        or self.last_updated_global <= datetime.strptime(
                         repo['user_mtime'].replace('Z','+0000'),
                         '%Y-%m-%dT%H:%M:%S%z')):
                     update_repos = True
@@ -267,6 +298,24 @@ class ArcFlow:
             self.log.info(f'File {repos_file_path} is up to date.')
 
 
+    def task_digital_object(self, repo, digital_object_id):
+        digital_object = self.client.get(
+            f'{repo["uri"]}/digital_objects/{digital_object_id}',
+            params={
+                'resolve': [
+                    'linked_agents',
+                    'subjects',
+                    'collection',
+                    'repository',
+                    'tree',
+                ],
+            }).json()
+        self.log.info(f'Processing digital object ID {digital_object_id}...')
+        omeka_uri = self.omeka.upsert(digital_object)
+        if omeka_uri:
+            self.log.info(f'Omeka item for digital object ID {digital_object_id}: {omeka_uri}.')
+
+
     def task_resource(self, repo, resource_id, xml_dir, pdf_dir):
         resource = self.client.get(
             f'{repo["uri"]}/resources/{resource_id}',
@@ -321,12 +370,12 @@ class ArcFlow:
             else:
                 xml_content = xml.content
 
-            if not self.skip_pdf_generation:
+            if not (self.skip_pdf_generation or self.dry_run_aspace):
                 pdf_job = self.request_pdf_job(repo['uri'], resource_id)
                 if pdf_job > 0:
                     # pdf files pending to create are named created_repoID_jobID_eadID.pdf
                     self.create_symlink(
-                        f'{pdf_dir}/{resource["ead_id"]}.pdf',
+                        f'{resource["ead_id"]}.pdf',
                         f'{pdf_dir}/created_{repo_id}_{pdf_job}_{resource["ead_id"]}.pdf'
                     )
 
@@ -359,18 +408,52 @@ class ArcFlow:
                 f'{pdf_dir}/{resource["ead_id"]}.pdf')
 
 
-    def task_repository(self, repo, modified_since):
-        resources = self.client.get(f'{repo["uri"]}/resources',
+    def get_digital_objects_from_children(self, repo, modified_since):
+        """
+        Get the digital objects IDs from the digital object components that have been
+        modified since last update in ArchivesSpace.
+        """
+        digital_objects = set()
+        page = 1
+        while True:
+            digital_object_components = self.client.get(
+                f'{repo["uri"]}/digital_object_components',
+                params={
+                    'page': page,
+                    'modified_since': modified_since,
+                }
+            ).json()
+
+            for digital_object_component in digital_object_components['results']:
+                if 'digital_object' in digital_object_component and digital_object_component['digital_object'] is not None:
+                    digital_object_id = int(digital_object_component['digital_object']['ref'].split('/')[-1])
+                    digital_objects.add(digital_object_id)
+
+            if digital_object_components['last_page'] == page:
+                break
+            page += 1
+        return digital_objects
+
+
+    def task_repository(self, repo, modified_since, object_type='resources'):
+        object_list = self.client.get(f'{repo["uri"]}/{object_type}',
             params={
                 'all_ids': True,
                 'modified_since': modified_since,
             }
         ).json()
         repo_id = self.get_repo_id(repo)
-        self.log.info(f'Found {len(resources)} resources in repository ID {repo_id}.')
+        if object_type == 'digital_objects':
+            # suppressed/deleted digital objects components don't update its
+            # parent digital object, so we need to check to get the full list of
+            # digital objects that need to be processed
+            digital_objects_from_children = self.get_digital_objects_from_children(repo, modified_since)
+            object_list = list(set(object_list) | digital_objects_from_children)
 
-        # return the repository and its resources for next async processing step
-        return (repo, resources)
+        self.log.info(f'Found {len(object_list)} {object_type} in repository ID {repo_id}.')
+
+        # return the repository and its objects (resources or digital objects)
+        return (repo, object_list)
 
 
     def task_pdf(self, pdf_symlink):
@@ -409,7 +492,37 @@ class ArcFlow:
             time.sleep(5)
 
 
-    def process_collections(self, num_processes):
+    def process_digital_objects(self, num_processes, modified_since):
+        # process digital objects that have been modified in ArchivesSpace since last update
+        self.log.info('Fetching digital objects from ArchivesSpace...')
+
+        if self.repository_id is not None:
+            repo = self.client.get(f'/repositories/{self.repository_id}')
+            repos = [repo.json()] if repo else []
+        else:
+            repos = self.client.get('repositories').json()
+
+        with (Pool(processes=num_processes) as pool):
+            self.last_updated_digital_objects = datetime.fromtimestamp(int(time.time()), timezone.utc)
+            # Tasks for processing repositories for digital objects
+            results_repositories = [pool.apply_async(
+                self.task_repository,
+                args=(repo, modified_since, 'digital_objects'))
+                for repo in repos]
+            # Collect outputs from repository tasks
+            outputs_repositories = [r.get() for r in results_repositories]
+
+            # Tasks for processing digital objects
+            results_digital_objects = [pool.apply_async(
+                self.task_digital_object, 
+                args=(repo, digital_object_id)) 
+                for repo, digital_objects in outputs_repositories for digital_object_id in digital_objects]
+            # Wait for digital objects tasks to complete
+            for r in results_digital_objects:
+                r.get()
+
+
+    def process_collections(self, num_processes, modified_since):
         """
         Update EADs in ArcLight with the latest data from resources in
         ArchivesSpace.
@@ -417,11 +530,6 @@ class ArcFlow:
         xml_dir = f'{self.arclight_dir}/public/xml'
         resource_dir = f'{xml_dir}/resources'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
-
-        modified_since = int(self.last_updated_collections.timestamp())
-
-        if self.force_update or modified_since <= 0:
-            modified_since = 0
 
         # process resources that have been modified in ArchivesSpace since last update
         self.log.info('Fetching resources from ArchivesSpace...')
@@ -435,10 +543,11 @@ class ArcFlow:
             repo_wildcard = '*'
 
         with (Pool(processes=num_processes) as pool):
-            # Tasks for processing repositories
+            self.last_updated_collections = datetime.fromtimestamp(int(time.time()), timezone.utc)
+            # Tasks for processing repositories for resources
             results_repositories = [pool.apply_async(
                 self.task_repository,
-                args=(repo, modified_since))
+                args=(repo, modified_since, 'resources'))
                 for repo in repos]
             # Collect outputs from repository tasks
             outputs_repositories = [r.get() for r in results_repositories]
@@ -490,13 +599,13 @@ class ArcFlow:
         return
 
 
-
-    def process_deleted_records(self, scope):
+    def process_deleted_records(self, modified_since_scope):
         """
         Process records deleted in ArchivesSpace since the last run.
 
-        scope: 'collections', 'creators', or 'all'
-            Determines which record types are checked for deletion and which
+        modified_since_scope: dict with keys 'collections', 'creators', 'digital_objects' 
+            and values with the corresponding last_updated timestamp.
+            Determines which record types are checked for deletion and which 
             timestamp is used as the lower bound for the delete-feed query.
         """
         if self.skip_deleted_record_processing:
@@ -508,17 +617,15 @@ class ArcFlow:
         agent_dir = f'{xml_dir}/agents'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        # Use the earlier timestamp when both types are in scope so no
-        # deletions are missed.  Per-type filtering happens in the loop below.
-        if scope == 'all':
-            modified_since = min(int(self.last_updated_collections.timestamp()),
-                                 int(self.last_updated_creators.timestamp()))
-        elif scope == 'collections':
-            modified_since = int(self.last_updated_collections.timestamp())
-        else:  # 'creators'
-            modified_since = int(self.last_updated_creators.timestamp())
+        # Determine the scope and modified_since timestamp for the delete-feed
+        # query based on the provided modified_since_scope
+        if len(modified_since_scope) > 1:
+            scope = 'all'
+            modified_since = min(modified_since_scope.values())
+        else:
+            scope, modified_since = next(iter(modified_since_scope.items())) 
 
-        resource_pattern = r'^/repositories/(?P<repo_id>\d+)/resources/(?P<record_id>\d+)$'
+        object_pattern = r'^/repositories/(?P<repo_id>\d+)/(?P<object_type>resources|digital_objects)/(?P<record_id>\d+)$'
         agent_pattern = r'^/agents/(?P<agent_type>people|corporate_entities|families)/(?P<record_id>\d+)$'
 
         page = 1
@@ -531,22 +638,27 @@ class ArcFlow:
                 }
             ).json()
             for record in deleted_records['results']:
-                resource_match = re.match(resource_pattern, record)
+                object_match = re.match(object_pattern, record)
                 agent_match = re.match(agent_pattern, record)
 
-                if resource_match and scope in ('collections', 'all'):
-                    resource_id = resource_match.group('record_id')
-                    self.log.info(f'Processing deleted resource ID {resource_id}...')
-                    symlink_path = f'{resource_dir}/{resource_id}.xml'
-                    ead_id = self.get_ead_from_symlink(symlink_path)
-                    if ead_id:
-                        self.delete_ead(
-                            resource_id,
-                            ead_id.replace('.', '-'),  # dashes in Solr
-                            f'{resource_dir}/{ead_id}.xml',  # dots in filenames
-                            f'{pdf_dir}/{ead_id}.pdf')
-                    else:
-                        self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
+                if object_match and scope in ('collections', 'digital_objects','all'):
+                    object_id = object_match.group('record_id')
+                    object_type = object_match.group('object_type')
+                    if object_type == 'resources':
+                        self.log.info(f'Processing deleted resource ID {object_id}...')
+                        symlink_path = f'{resource_dir}/{object_id}.xml'
+                        ead_id = self.get_ead_from_symlink(symlink_path)
+                        if ead_id:
+                            self.delete_ead(
+                                object_id,
+                                ead_id.replace('.', '-'),  # dashes in Solr
+                                f'{resource_dir}/{ead_id}.xml',  # dots in filenames
+                                f'{pdf_dir}/{ead_id}.pdf')
+                        else:
+                            self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
+                    else: # digital_objects:
+                        self.log.info(f'Processing deleted digital object ID {object_id}...')
+                        self.omeka.delete(record)
 
                 if agent_match and scope in ('creators', 'all'):
                     agent_type = agent_match.group('agent_type')
@@ -864,7 +976,7 @@ class ArcFlow:
             self.log.critical(traceback.format_exc())
             return None
 
-    def process_creators(self, num_processes):
+    def process_creators(self, num_processes, modified_since):
         """
         Process creator agents and generate standalone creator documents.
 
@@ -874,10 +986,10 @@ class ArcFlow:
 
         xml_dir = f'{self.arclight_dir}/public/xml'
         agents_dir = f'{xml_dir}/agents'
-        modified_since = int(self.last_updated_creators.timestamp())
 
         self.log.info(f'Processing creator agents...')
 
+        self.last_updated_creators = datetime.fromtimestamp(int(time.time()), timezone.utc)
         # Get agents to process
         agents = self.get_all_agents(modified_since=modified_since)
 
@@ -1169,11 +1281,14 @@ class ArcFlow:
         if deleted_solr_record:
             self.delete_file(file_path)
 
-    def save_config_file(self):
+    def save_config_file(self, scope):
         """
         Save the last updated timestamps to the .arcflow.yml file.
-        Each record type (collections, creators) has its own timestamp so they
+        Each type (collections, creators, digital_objects) has its own timestamp so they
         can be run independently without overwriting each other's state.
+
+        scope: 'collections', 'creators', 'digital_objects' or 'all'
+            Determines which timestamps are updated based on which record types are in scope.
         """
         if self.skip_timestamp_update:
             self.log.info('Skipping update of .arcflow.yml configuration file. (--skip-timestamp-update flag set)')
@@ -1187,11 +1302,14 @@ class ArcFlow:
             except FileNotFoundError:
                 config = {}
             config.pop('last_updated', None)  # remove legacy single key if present
-            now = datetime.fromtimestamp(self.start_time, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S%z')
-            if not self.agents_only:
-                config['last_updated_collections'] = now
-            if not self.collections_only:
-                config['last_updated_creators'] = now
+
+            if scope in ('collections', 'all'):
+                config['last_updated_collections'] = self.last_updated_collections.strftime('%Y-%m-%dT%H:%M:%S%z')
+            if scope in ('creators', 'all'):
+                config['last_updated_creators'] = self.last_updated_creators.strftime('%Y-%m-%dT%H:%M:%S%z')
+            if scope in ('digital_objects', 'all'):
+                config['last_updated_digital_objects'] = self.last_updated_digital_objects.strftime('%Y-%m-%dT%H:%M:%S%z')
+
             with open(self.arcflow_file_path, 'w') as file:
                 yaml.dump(config, file)
                 self.log.info(f'Saved file .arcflow.yml.')
@@ -1199,7 +1317,17 @@ class ArcFlow:
             self.log.error(f'Error writing to file .arcflow.yml: {e}')
 
 
-    def run_collections(self, num_processes):
+    def run_digital_objects(self, modified_since, num_processes):
+        """
+        Teardown (if force_update or first run), and process digital objects.
+        """
+        if self.force_update or modified_since <= 0:
+            modified_since = 0
+            self.log.info('Deleting all digital objects from Omeka...')
+            self.omeka.delete_all(soft_delete=True) # soft delete to allow for potential recovery if something goes wrong
+        self.process_digital_objects(num_processes, modified_since)
+
+    def run_collections(self, modified_since, num_processes):
         """
         Teardown (if force_update or first run), set up directories, and
         process collection EADs.
@@ -1208,7 +1336,9 @@ class ArcFlow:
         resource_dir = f'{xml_dir}/resources'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        if self.force_update or int(self.last_updated_collections.timestamp()) <= 0:
+        if self.force_update or modified_since <= 0:
+            modified_since = 0
+
             # Delete only collection records from Solr so that creator records
             # remain intact when collections are rebuilt independently.
             # Standard query parser: '*:* AND NOT is_creator:true' matches all
@@ -1233,10 +1363,10 @@ class ArcFlow:
 
         os.makedirs(resource_dir, exist_ok=True)
         os.makedirs(pdf_dir, exist_ok=True)
-        self.process_collections(num_processes)
+        self.process_collections(num_processes, modified_since)
 
 
-    def run_creators(self, num_processes):
+    def run_creators(self, modified_since, num_processes):
         """
         Teardown (if force_update or first run), set up directories, and
         process creator agents.
@@ -1244,7 +1374,9 @@ class ArcFlow:
         xml_dir = f'{self.arclight_dir}/public/xml'
         agents_dir = f'{xml_dir}/agents'
 
-        if self.force_update or int(self.last_updated_creators.timestamp()) <= 0:
+        if self.force_update or modified_since <= 0:
+            modified_since = 0
+
             # Delete only creator records from Solr (collections are handled separately).
             try:
                 response = requests.post(
@@ -1264,10 +1396,10 @@ class ArcFlow:
                 self.log.error(f'Error deleting creator records from ArcLight Solr: {e}')
 
         os.makedirs(agents_dir, exist_ok=True)
-        self.process_creators(num_processes)
+        self.process_creators(num_processes, modified_since)
 
 
-    def run_all(self):
+    def run_all(self, modified_since_scope):
         """
         Run all record-type workflows.
         Updates repository metadata, then runs all record-type workflows in parallel.
@@ -1275,14 +1407,25 @@ class ArcFlow:
         are introduced, add them here.
         """
         self.update_repositories()
+
+        # Digital objects need to be processed before collections because they 
+        # modify the EADs with links to digital objects, and we want those links 
+        # to be present when collections are indexed.
+        self.run_digital_objects(modified_since_scope['digital_objects'], self.max_processes)
+
         # Make sure that the combined sum of num_processes across all parallel 
         # workflows does not exceed max_processes:
-        # 9 processes for collections and 1 for creators is an empirically derived
-        # ratio based on typical processing times, but this can be adjusted as needed.
-        workflows = [(self.run_collections, 9), (self.run_creators, 1)]
+        # 3 processes for collections and 1 for creators is an empirically derived
+        # ratio based on typical processing times, amount of memory and CPU power of the server.
+        # Adjust as needed based on your environment and data.
+        # but this can be adjusted as needed.
+        workflows = [
+            (self.run_collections, modified_since_scope['collections'], 3),
+            (self.run_creators, modified_since_scope['creators'], 1)
+        ]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
             self.log.info('Running collections and creators in parallel...')
-            futures = [executor.submit(workflow, num_processes) for workflow, num_processes in workflows]
+            futures = [executor.submit(workflow, modified_since, num_processes) for workflow, modified_since, num_processes in workflows]
             concurrent.futures.wait(futures)
             exceptions = []
             for future in futures:
@@ -1300,29 +1443,33 @@ class ArcFlow:
         """
         self.log.info(f'ArcFlow process started (PID: {self.pid}).')
 
+        modified_since_scope = {}
         if self.collections_only:
-            scope = 'collections'
-            self.run_collections(self.max_processes)
+            modified_since_scope['collections'] = int(self.last_updated_collections.timestamp())
+            self.run_collections(modified_since_scope['collections'], self.max_processes)
+        elif self.digital_objects_only:
+            modified_since_scope['digital_objects'] = int(self.last_updated_digital_objects.timestamp())
+            self.run_digital_objects(modified_since_scope['digital_objects'], self.max_processes)
         elif self.agents_only:
-            scope = 'creators'
-            self.run_creators(self.max_processes)
+            modified_since_scope['creators'] = int(self.last_updated_creators.timestamp())
+            self.run_creators(modified_since_scope['creators'], self.max_processes)
         else:
-            scope = 'all'
-            self.run_all()
+            modified_since_scope = {
+                'collections': int(self.last_updated_collections.timestamp()),
+                'creators': int(self.last_updated_creators.timestamp()),
+                'digital_objects': int(self.last_updated_digital_objects.timestamp())
+            }
+            self.run_all(modified_since_scope)
 
-        # Skip deleted record processing on force_update or if all active
-        # timestamps indicate a first run (nothing has been indexed yet).
-        active_timestamps = []
-        if scope in ('collections', 'all'):
-            active_timestamps.append(int(self.last_updated_collections.timestamp()))
-        if scope in ('creators', 'all'):
-            active_timestamps.append(int(self.last_updated_creators.timestamp()))
-        if self.force_update or all(t <= 0 for t in active_timestamps):
+        # Skip deleted record processing on force_update or
+        # if modified_since for the relevant scope(s) is 0 or negative, 
+        # which indicates a first run (nothing has been indexed yet).
+        if self.force_update or all(t <= 0 for t in modified_since_scope.values()):
             self.log.info('Skipping processing of records deleted in ArchivesSpace.')
         else:
-            self.process_deleted_records(scope)
+            self.process_deleted_records(modified_since_scope)
 
-        self.save_config_file()
+        self.save_config_file('all' if len(modified_since_scope) > 1 else next(iter(modified_since_scope.keys())))
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
 
 
@@ -1346,17 +1493,21 @@ def main():
         required=True,
         help='URL of the ASpace Solr core',)
     parser.add_argument(
-            '--ead-extra-config',
-            default='',
-            help='Path to extra Traject EAD configuration file',)
+        '--ead-extra-config',
+        default='',
+        help='Path to extra Traject EAD configuration file',)
     parser.add_argument(
         '--agents-only',
         action='store_true',
-        help='Process only agent records, skip collections',)
+        help='Process only agent records',)
     parser.add_argument(
         '--collections-only',
         action='store_true',
-        help='Process only collections, skip creator processing',)
+        help='Process only collections',)
+    parser.add_argument(
+        '--digital-objects-only',
+        action='store_true',
+        help='Process only digital objects',)
     parser.add_argument(
         '--skip-creator-indexing',
         action='store_true',
@@ -1388,11 +1539,15 @@ def main():
         action='store_true',
         help='Skip Solr indexing of collection records (useful for testing)',
     )
+    parser.add_argument(
+        '--dry-run-aspace',
+        action='store_true',
+        help='Run the process without making any changes or triggering any jobs in ArchivesSpace (for testing purposes)',)        
     args = parser.parse_args()
 
     # Validate mutually exclusive flags
-    if args.agents_only and args.collections_only:
-        parser.error('Cannot use both --agents-only and --collections-only')
+    if sum([args.agents_only, args.collections_only, args.digital_objects_only]) > 1:
+        parser.error('Cannot use more than one of --agents-only, --collections-only, or --digital-objects-only')
 
     arcflow = ArcFlow(
         arclight_dir=args.arclight_dir,
@@ -1402,13 +1557,15 @@ def main():
         force_update=args.force_update,
         agents_only=args.agents_only,
         collections_only=args.collections_only,
+        digital_objects_only=args.digital_objects_only,
         skip_creator_indexing=args.skip_creator_indexing,
         skip_pdf_generation=args.skip_pdf_generation,
         repository_id=args.repository_id,
         skip_deleted_record_processing=args.skip_deleted_record_processing,
         skip_timestamp_update=args.skip_timestamp_update,
         skip_resource_processing=args.skip_resource_processing,
-        skip_collection_indexing=args.skip_collection_indexing,)
+        skip_collection_indexing=args.skip_collection_indexing,
+        dry_run_aspace=args.dry_run_aspace,)
     arcflow.run()
 
 
