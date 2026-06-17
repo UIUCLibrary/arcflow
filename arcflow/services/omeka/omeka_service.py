@@ -271,8 +271,8 @@ class OmekaService:
                         self.NOTE_TYPES[note['type']], [])
                     item_data[self.NOTE_TYPES[note['type']]].append({
                         'property_id': 'auto',
-                        '@value': "\n\n".join(note['content']),
-                        'type': 'literal',
+                        '@value': "\n\n".join(note['content']).replace('<a href', '<ref href').replace('</a>', '</ref>'),
+                        'type': 'ead:xml',
                         'is_public': self._is_public(note),
                     })
 
