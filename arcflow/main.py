@@ -606,7 +606,7 @@ class ArcFlow:
         modified_since_scope: dict with keys 'collections', 'creators', 'digital_objects' 
             and values with the corresponding last_updated timestamp.
             Determines which record types are checked for deletion and which 
-            timestamp is used as the lower bound for the delete-feed query.
+            timestamp is used as the lower bound for the delete-feed-restricted query.
         """
         if self.skip_deleted_record_processing:
             self.log.info('Skipping processing of records deleted in ArchivesSpace. (--skip-deleted-record-processing flag set)')
@@ -617,7 +617,7 @@ class ArcFlow:
         agent_dir = f'{xml_dir}/agents'
         pdf_dir = f'{self.arclight_dir}/public/pdf'
 
-        # Determine the scope and modified_since timestamp for the delete-feed
+        # Determine the scope and modified_since timestamp for the delete-feed-restricted
         # query based on the provided modified_since_scope
         if len(modified_since_scope) > 1:
             scope = 'all'
@@ -631,7 +631,7 @@ class ArcFlow:
         page = 1
         while True:
             deleted_records = self.client.get(
-                '/delete-feed',
+                '/delete-feed-restricted',
                 params={
                     'page': page,
                     'modified_since': modified_since,
