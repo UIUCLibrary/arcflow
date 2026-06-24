@@ -1471,7 +1471,51 @@ class ArcFlow:
 
         self.save_config_file('all' if len(modified_since_scope) > 1 else next(iter(modified_since_scope.keys())))
         self.log.info(f'ArcFlow process completed (PID: {self.pid}). Elapsed time: {time.strftime("%H:%M:%S", time.gmtime(int(time.time()) - self.start_time))}.')
+        # if errors file is not empty send an email alert with the errors
+        if os.path.isfile(error_log_file) and os.path.getsize(error_log_file) > 0:
+            with open(error_log_file, 'r') as f:
+                errors = f.read()
+            subject = f'ArcFlow process completed with critical errors (PID: {self.pid})'
+            body = f'Critical errors occurred in the last ArcFlow run. Please see details below for more information. Resolve the reported issues to avoid possible data integrity impacts. Once resolved, delete /opt/arclight/arcflow/logs/error.log in the server (or rename it if you want to keep a record of past errors) so ArcFlow can resume normal operation.\n\nDetails:\n{errors}'
+            self.log.info(f'Critical errors occurred. Sending email alert to {self.email_to}')
+            if not _sendmail(self.email_from, self.email_to, subject, body):
+                self.log.error(f'Failed to send email to {self.email_to}.')
+            else:
+                self.log.info(f'Email sent to {self.email_to} with critical errors.')
 
+
+def _sendmail(from_address, to_address, subject, body):
+    """
+    Send an email using the sendmail command.
+
+    Args:
+        from_address (str): The sender's email address.
+        to_address (str): The recipient's email address (use space-separated list for multiple recipients).
+        subject (str): The subject of the email.
+        body (str): The body of the email.
+
+    Returns:
+        bool: True if the email was sent successfully, False otherwise.
+    """
+    try:
+        # Prepare the email content
+        email_content = f"From: {from_address}\nTo: {to_address}\nSubject: {subject}\n\n{body}"
+
+        # Use subprocess to call sendmail
+        process = subprocess.Popen(
+            ['sendmail', to_address],
+            stdin=subprocess.PIPE,
+            text=True
+        )
+        process.communicate(email_content)
+
+        if process.returncode == 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        self.log.error(f'Error sending email: {e}')
+        return False
 
 
 def main():
