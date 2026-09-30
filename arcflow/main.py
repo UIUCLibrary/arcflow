@@ -1316,6 +1316,21 @@ class ArcFlow:
         except Exception as e:
             self.log.error(f'Error writing to file .arcflow.yml: {e}')
 
+        # disable Archon integration if it was enabled for a single run
+        if (self.include_digital_objects and 
+                hasattr(self, 'use_archon') and self.use_archon == 2):
+            try:
+                with open(self.omeka_file_path, 'r') as file:
+                    lines = file.readlines()
+                with open(self.omeka_file_path, 'w') as file:
+                    for line in lines:
+                        if re.match(r'^\s*use_archon\s*:', line):
+                            file.write('use_archon: 0\n')
+                        else:
+                            file.write(line)
+                    self.log.info(f'Updated file .omeka.yml.')
+            except Exception as e:
+                self.log.error(f'Error writing to file .omeka.yml: {e}')
 
     def run_digital_objects(self, modified_since, num_processes):
         """
