@@ -543,7 +543,6 @@ class ArcFlow:
             repo_wildcard = '*'
 
         with (Pool(processes=num_processes) as pool):
-            self.last_updated_collections = datetime.fromtimestamp(int(time.time()), timezone.utc)
             # Tasks for processing repositories for resources
             results_repositories = [pool.apply_async(
                 self.task_repository,
@@ -553,6 +552,7 @@ class ArcFlow:
             outputs_repositories = [r.get() for r in results_repositories]
 
             if not self.skip_resource_processing:
+                self.last_updated_collections = datetime.fromtimestamp(int(time.time()), timezone.utc)
                 # Tasks for processing resources
                 results_resources = [pool.apply_async(
                     self.task_resource,
