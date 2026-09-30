@@ -37,7 +37,7 @@ class OmekaService:
         self.asnake_client = kwargs.get('asnake_client', None)
         self.dry_run_aspace = kwargs.get('dry_run_aspace', False)
         self.tmp_dir = kwargs.get('tmp_dir', '/tmp/')
-        self.omeka_local_url = kwargs['omeka']['local_url']
+        self.omeka_api_url = kwargs['omeka']['api_url']
         self.omeka_public_url = kwargs['omeka']['public_url']
         self.arclight_public_url = kwargs['arclight']['public_url']
         self.params = {
@@ -94,7 +94,7 @@ class OmekaService:
     def get(self, endpoint, params=None):
         with requests.Session() as session:
             response = session.get(
-                f'{self.omeka_local_url}/{endpoint}', 
+                f'{self.omeka_api_url}/{endpoint}',
                 params={**self.params, **(params or {})})
             response.raise_for_status()
             return response.json()
@@ -462,7 +462,7 @@ class OmekaService:
             json.dumps(item_data),
             'application/json')))
         with requests.Session() as session:
-            response = session.post(f'{self.omeka_local_url}/api/items', 
+            response = session.post(f'{self.omeka_api_url}/api/items',
                 params=self.params, files=form_data)
 
         try:
@@ -554,7 +554,7 @@ class OmekaService:
                                 if file_version['is_representative']:
                                     primary_media = media_list[file_name]
                                 response = session.patch(
-                                    f'{self.omeka_local_url}/api/media/{media_list[file_name]}',
+                                    f'{self.omeka_api_url}/api/media/{media_list[file_name]}',
                                     params=self.params, json=media_data)
                                 response.raise_for_status()
 
@@ -575,7 +575,7 @@ class OmekaService:
                                 ]
 
                                 response = session.post(
-                                    f'{self.omeka_local_url}/api/media', params=self.params, files=form_data)
+                                    f'{self.omeka_api_url}/api/media', params=self.params, files=form_data)
                                 response.raise_for_status()
 
                                 if file_version['is_representative']:
@@ -589,7 +589,7 @@ class OmekaService:
                 if soft_delete:
                     for media in media_list.values():
                         response = session.patch(
-                            f'{self.omeka_local_url}/api/media/{media}',
+                            f'{self.omeka_api_url}/api/media/{media}',
                             params=self.params, json={
                                 'o:is_public': False,
                             })
@@ -599,7 +599,7 @@ class OmekaService:
                 else:
                     for media in media_list.values():
                         response = session.delete(
-                            f'{self.omeka_local_url}/api/media/{media}',
+                            f'{self.omeka_api_url}/api/media/{media}',
                             params=self.params)
                         response.raise_for_status()
 
@@ -624,7 +624,7 @@ class OmekaService:
                         break
 
             response = session.patch(
-                f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
+                f'{self.omeka_api_url}/api/items/{item[0]["o:id"]}',
                 params=self.params, json=item_data)
             response.raise_for_status()
             return self._update_omeka_uri(digital_object, response.json()['o:id'])
@@ -638,7 +638,7 @@ class OmekaService:
         with requests.Session() as session:
             if soft_delete:
                 response = session.patch(
-                    f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
+                    f'{self.omeka_api_url}/api/items/{item[0]["o:id"]}',
                     params=self.params, json={
                         'o:is_public': False,
                     })
@@ -648,7 +648,7 @@ class OmekaService:
             # (deletes the item and all its media files permanently, so use with caution)
             else:
                 response = session.delete(
-                    f'{self.omeka_local_url}/api/items/{item[0]["o:id"]}',
+                    f'{self.omeka_api_url}/api/items/{item[0]["o:id"]}',
                     params=self.params)
                 response.raise_for_status()
                 return response.status_code == 204
@@ -668,7 +668,7 @@ class OmekaService:
 
                     for item in items:
                         response = session.patch(
-                            f'{self.omeka_local_url}/api/items/{item["o:id"]}',
+                            f'{self.omeka_api_url}/api/items/{item["o:id"]}',
                             params=self.params, json={
                                 'o:is_public': False,
                             })
@@ -686,7 +686,7 @@ class OmekaService:
 
                     for item in items:
                         response = session.delete(
-                            f'{self.omeka_local_url}/api/items/{item["o:id"]}',
+                            f'{self.omeka_api_url}/api/items/{item["o:id"]}',
                             params=self.params)
                         response.raise_for_status()
                     self.log.info(f'Deleted batch of {len(items)} items found.')

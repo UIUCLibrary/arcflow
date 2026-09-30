@@ -10,16 +10,12 @@ This directory contains a complete, working installation of arcflow with creator
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Configure credentials
-cp .archivessnake.yml.example .archivessnake.yml
-nano .archivessnake.yml  # Add your ArchivesSpace credentials
+# 2. Configure arcflow
+cp .arcflow.config.yml.example .arcflow.config.yml
+nano .arcflow.config.yml  # Add your settings
 
 # 3. Run arcflow
-python -m arcflow.main \
-  --arclight-dir /path/to/your/arclight-app \
-  --aspace-dir /path/to/your/archivesspace \
-  --solr-url http://localhost:8983/solr/blacklight-core \
-  --aspace-solr-url http://localhost:8983/solr/archivesspace
+python -m arcflow.main
 ```
 
 ---
@@ -168,25 +164,20 @@ See the original installation instructions in your deployment documentation.
 
 ## Configuration
 
-- `.archivessnake.yml` - ArchivesSpace API credentials
+- `.arcflow.config.yml` - Single configuration file with connection settings for ArchivesSpace, ArcLight, Omeka, and Archon, plus other deployment-specific options
 - `.arcflow.state.yml` - Machine-managed run state (auto-generated/updated by ArcFlow; tracks timestamps used for incremental processing). Not meant to be edited manually.
 
 ## Usage
 
 ```bash
-python -m arcflow.main --arclight-dir /path --aspace-dir /path --solr-url http://... [options]
+python -m arcflow.main [options]
 ```
 
 ### Command Line Options
 
-Required arguments:
-- `--arclight-dir` - Path to ArcLight installation directory
-- `--aspace-dir` - Path to ArchivesSpace installation directory
-- `--solr-url` - URL of the Solr core (e.g., http://localhost:8983/solr/blacklight-core)
-
 Optional arguments:
 - `--force-update` - Force update of all data (recreates everything from scratch)
-- `--traject-extra-config` - Path to extra Traject configuration file
+- `--ead-extra-config` - Path to extra Traject configuration file
 - `--agents-only` - Process only agent records, skip collections (useful for testing agents)
 - `--collections-only` - Skips creators, processes EAD, PDF finding aid and indexes collections
 - `--skip-creator-indexing` - Collects EAC-CPF files only, does not index into Solr
@@ -194,31 +185,19 @@ Optional arguments:
 
 **Normal run (process all collections and agents):**
 ```bash
-python -m arcflow.main \
-  --arclight-dir /path/to/arclight \
-  --aspace-dir /path/to/archivesspace \
-  --solr-url http://localhost:8983/solr/blacklight-core \
-  --aspace-solr-url http://localhost:8983/solr/archivesspace
+python -m arcflow.main
 
 ```
 
 **Process only agents (skip collections):**
 ```bash
 python -m arcflow.main \
-  --arclight-dir /path/to/arclight \
-  --aspace-dir /path/to/archivesspace \
-  --solr-url http://localhost:8983/solr/blacklight-core \
-  --aspace-solr-url http://localhost:8983/solr/archivesspace \
   --agents-only
 ```
 
 **Force full update:**
 ```bash
 python -m arcflow.main \
-  --arclight-dir /path/to/arclight \
-  --aspace-dir /path/to/archivesspace \
-  --solr-url http://localhost:8983/solr/blacklight-core \
-  --aspace-solr-url http://localhost:8983/solr/archivesspace \
   --force-update
 ```
 
