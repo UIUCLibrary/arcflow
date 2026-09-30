@@ -1,0 +1,58 @@
+# ArchivesSpace API connection settings
+archivesspace:
+  baseurl: "http://localhost:8089"
+  username: "user"
+  password: "password"
+  solr_core: "http://localhost:8983/solr/archivesspace"
+
+# ArcLight connection settings
+arclight:
+  public_url: "https://arclight.public.url"
+  home_dir: "/path/to/arclight/home"
+  solr_core: "http://localhost:8983/solr/blacklight-core"
+
+# Omeka connection settings
+omeka:
+  public_url: "https://omeka.public.url"
+  api_url: "http://localhost:780"
+  key_identity: "omeka_api_key_identity"
+  key_credential: "omeka_api_key_credential"
+
+# Processing settings
+processing:
+  max_processes: 4  # Minimum is 4. More than 10 seems to exhaust the connection pool and cause errors. 4 is an empirically derived number that seems to work well based on the amount of memory and CPU power of the server, but this can be adjusted as needed.
+indexing:
+  collection_batch_size: 400
+  creator_batch_size: 100
+  processing_thread_pool: 4
+  solr_writer_thread_pool: 8
+
+# Email settings for error notifications
+email:
+  from_address: "no-reply@example.com"
+  to_address: "admin@example.com"
+
+# Archon integration mode:
+# 0: Disabled
+# 1: Always enabled
+# 2: Enabled for a single run (will reset to disabled after one execution)
+use_archon: 0
+
+# Archon database connection settings organized by ArchivesSpace repository ID
+# Use comma-separated IDs if multiple repositories share the same Archon database
+archon:
+  'repo_id_1, repo_id_2':
+    host: "database_host"
+    port: 1433
+    database: "archon_database_name_1"
+    username: "user_1"
+    password: "password_1"
+  'repo_id_3':
+    host: "database_host"
+    port: 1433
+    database: "archon_database_name_2"
+    username: "user_2"
+    password: "password_2"
+
+# media temporary directory
+tmp_dir: "/path/to/archivesspace/data/tmp/"

@@ -53,14 +53,11 @@ MANIFEST
 .conda*/
 .python-version
 
-# ArchivesSnake configuration file
-.archivessnake.yml
+# ArchFlow configuration file
+.arcflow.config.yml
 
 # ArcFlow state file
 .arcflow.state.yml
-
-# Omeka configuration file
-.omeka.yml
 
 # PID files
 *.pid

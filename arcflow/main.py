@@ -50,9 +50,6 @@ class ArcFlow:
 
     def __init__(
             self,
-            arclight_dir,
-            solr_url,
-            aspace_solr_url,
             ead_extra_config='',
             force_update=False,
             agents_only=False,
@@ -74,23 +71,6 @@ class ArcFlow:
             logging.error(f'Critical errors occurred in the last ArcFlow run. See {error_log_file} for details, resolve the reported issues to avoid possible data integrity impacts. Once resolved, delete {error_log_file} (or rename it if you want to keep a record of past errors) so ArcFlow can resume normal operation.')
             exit(1)
 
-        self.solr_url = solr_url
-        self.aspace_solr_url = aspace_solr_url
-        self.batch_size = 400
-        self.max_processes = 4 # more than 10 seems to exhaust the connection pool and cause errors. 4 is an empirically derived number that seems to work well based on the amount of memory and CPU power of the server, but this can be adjusted as needed.
-        self.arclight_dir = arclight_dir
-        if ead_extra_config.strip():
-            if not os.path.isfile(ead_extra_config):
-                raise FileNotFoundError(f'Specified ead_extra_config not found: {ead_extra_config}')
-            self.ead_extra_config = ead_extra_config
-        else:
-            default_config = f'{self.arclight_dir}/lib/arcuit/traject/ead_extra_config.rb'
-            if os.path.isfile(default_config):
-                self.ead_extra_config = default_config
-                logging.info(f'Using default ead_extra_config: {default_config}')
-            else:
-                self.ead_extra_config = None
-                logging.warning(f'Default ead_extra_config not found at {default_config}. Proceeding without extra config.')
         self.job_type = 'print_to_pdf_job'
         self.force_update = force_update
         self.agents_only = agents_only
@@ -104,18 +84,20 @@ class ArcFlow:
         self.skip_resource_processing = skip_resource_processing
         self.skip_collection_indexing = skip_collection_indexing
         self.dry_run_aspace = dry_run_aspace
+
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
         self.arcflow_state_file_path = os.path.join(base_dir, '.arcflow.state.yml')
-        self.omeka_file_path = os.path.join(base_dir, '.omeka.yml')
+        self.arcflow_config_file_path = os.path.join(base_dir, '.arcflow.config.yml')
         if self.is_running():
             self.log.info(f'ArcFlow process previously started still running. Exiting (PID: {self.pid}).')
             exit(0)
         else:
             self.create_pid_file()
-
         self.start_time = int(time.time())
+
+        # load state from .arcflow.state.yml
         try:
             with open(self.arcflow_state_file_path, 'r') as file:
                 config = yaml.safe_load(file) or {}
@@ -140,7 +122,6 @@ class ArcFlow:
                 self.last_updated_collections = datetime.fromtimestamp(0, timezone.utc)
                 self.last_updated_creators = datetime.fromtimestamp(0, timezone.utc)
                 self.last_updated_digital_objects = datetime.fromtimestamp(0, timezone.utc)
-
         # Use the oldest of the run timestamps so that a repo change
         # is detected regardless of which pipeline last ran.
         self.last_updated_global = min(
@@ -148,41 +129,80 @@ class ArcFlow:
             self.last_updated_creators,
             self.last_updated_digital_objects)
 
+        # load configuration from .arcflow.config.yml
         try:
-            with open(os.path.join(base_dir, '.archivessnake.yml'), 'r') as file:
-                config = yaml.safe_load(file)
+            with open(self.arcflow_config_file_path, 'r') as file:
+                config = yaml.safe_load(file) or {}
         except FileNotFoundError:
-            self.log.error('File .archivessnake.yml not found. Create the file.')
+            self.log.error('File .arcflow.config.yml not found. Create the file.')
             exit(1)
+        except yaml.YAMLError as e:
+            self.log.error(f'Error parsing .arcflow.config.yml: {e}')
+            exit(1)
+
+        self.max_processes = max(4, config.get('processing', {}).get('max_processes', 4))
+        self.collection_batch_size = max(100, config.get('indexing', {}).get('collection_batch_size', 100))
+        self.creator_batch_size = max(100, config.get('indexing', {}).get('creator_batch_size', 100))
+        self.processing_thread_pool = max(1, config.get('indexing', {}).get('processing_thread_pool', 1))
+        self.solr_writer_thread_pool = max(1, config.get('indexing', {}).get('solr_writer_thread_pool', 1))
+        self.email_from = config.get('email', {}).get('from_address')
+        self.email_to = config.get('email', {}).get('to_address')
+
         try:
+            self.arclight_dir = config['arclight']['home_dir']
+            self.solr_url = config['arclight']['solr_core']
+            self.aspace_solr_url = config['archivesspace']['solr_core']
+            if not all(isinstance(value, str) and value.strip()
+                    for value in (self.arclight_dir, self.solr_url, self.aspace_solr_url)):
+                raise ValueError('Required settings must be non-empty strings.')
+        except (KeyError, TypeError, ValueError) as e:
+            self.log.error(f'Missing or invalid required settings in .arcflow.config.yml: {e}')
+            exit(1)
+
+        if ead_extra_config.strip():
+            if not os.path.isfile(ead_extra_config):
+                raise FileNotFoundError(f'Specified ead_extra_config not found: {ead_extra_config}')
+            self.ead_extra_config = ead_extra_config
+        else:
+            default_config = f'{self.arclight_dir}/lib/arcuit/traject/ead_extra_config.rb'
+            if os.path.isfile(default_config):
+                self.ead_extra_config = default_config
+                logging.info(f'Using default ead_extra_config: {default_config}')
+            else:
+                self.ead_extra_config = None
+                logging.warning(f'Default ead_extra_config not found at {default_config}. Proceeding without extra config.')
+
+        # Initialize services
+        try:
+            aspace_config = config['archivesspace']
             self.client = ASnakeClient(
-                username=config['username'],
-                password=config['password'],
-                baseurl=config['baseurl'],
+                username=aspace_config['username'],
+                password=aspace_config['password'],
+                baseurl=aspace_config['baseurl'],
             )
             self.client.authorize()
+        except KeyError as e:
+            self.log.error(f'Missing required archivesspace config key {e} in .arcflow.config.yml.')
+            exit(1)
         except Exception as e:
             self.log.error(f'Error authorizing ASnakeClient: {e}')
             exit(1)
 
-        # Initialize services
-        try:
-            with open(self.omeka_file_path, 'r') as file:
-                config = yaml.safe_load(file)
-                self.use_archon = config.get('use_archon', 0)
-        except FileNotFoundError:
-            self.log.error('File .omeka.yml not found. Create the file.')
-            exit(1)
+        self.use_archon = config.get('use_archon', 0)
         try:
             self.omeka = OmekaService(
                 **config,
                 log=self.log,
-                asnake_client = self.client,
-                dry_run_aspace = self.dry_run_aspace,
+                asnake_client=self.client,
+                dry_run_aspace=self.dry_run_aspace,
             )
         except Exception as e:
-            self.log.error(f'Error initializing OmekaClient: {e}')
-            exit(1)
+            # Omeka is not needed in agents_only or collections_only mode
+            if sum([self.agents_only, self.collections_only]) > 0:
+                self.log.warning('OmekaClient initialization failed while running in --agents-only or --collections-only mode. Proceeding without OmekaClient.')
+            else:
+                self.log.error(f'Error initializing OmekaClient: {e}')
+                exit(1)
 
         self.xml_transform = XmlTransformService(client=self.client, log=self.log)
         self.agent_service = AgentService(client=self.client, log=self.log)
@@ -644,7 +664,7 @@ class ArcFlow:
                 if object_match and scope in ('collections', 'digital_objects','all'):
                     object_id = object_match.group('record_id')
                     object_type = object_match.group('object_type')
-                    if object_type == 'resources':
+                    if object_type == 'resources' and scope in ('collections', 'all'):
                         self.log.info(f'Processing deleted resource ID {object_id}...')
                         symlink_path = f'{resource_dir}/{object_id}.xml'
                         ead_id = self.get_ead_from_symlink(symlink_path)
@@ -656,7 +676,7 @@ class ArcFlow:
                                 f'{pdf_dir}/{ead_id}.pdf')
                         else:
                             self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
-                    else: # digital_objects:
+                    elif object_type == 'digital_objects' and scope in ('digital_objects', 'all'):
                         self.log.info(f'Processing deleted digital object ID {object_id}...')
                         self.omeka.delete(record)
 
@@ -699,7 +719,7 @@ class ArcFlow:
                     if (xml_file.is_symlink()
                             and xml_file.name.startswith(f'created_{repo_id}_')):
                         xml_files.append(xml_file.path)
-                        if len(xml_files) >= self.batch_size:
+                        if len(xml_files) >= self.collection_batch_size:
                             break
 
                 if len(xml_files) > 0:
@@ -711,9 +731,9 @@ class ArcFlow:
                 cmd = [
                     'bundle', 'exec', 'traject',
                     '-u', self.solr_url,
-                    '-s', 'processing_thread_pool=4',
-                    '-s', 'solr_writer.thread_pool=8',
-                    '-s', f'solr_writer.batch_size={self.batch_size}',
+                    '-s', f'processing_thread_pool={self.processing_thread_pool}',
+                    '-s', f'solr_writer.thread_pool={self.solr_writer_thread_pool}',
+                    '-s', f'solr_writer.batch_size={self.collection_batch_size}',
                     '-s', 'solr_writer.commit_on_close=false',
                     '-i', 'xml',
                     '-c', traject_config,
@@ -1018,7 +1038,7 @@ class ArcFlow:
             traject_config = self.find_eac_cpf_config()
             if traject_config:
                 self.log.info(f'Using traject config: {traject_config}')
-                indexed = self.index_creators(agents_dir, creator_ids)
+                indexed = self.index_creators(agents_dir, creator_ids, self.creator_batch_size)
                 self.log.info(f'Creator indexing complete: {indexed}/{len(creator_ids)} indexed')
             else:
                 self.log.warning(f'Skipping creator indexing (traject config not found)')
@@ -1119,8 +1139,12 @@ class ArcFlow:
                 cmd = [
                     'bundle', 'exec', 'traject',
                     '-u', self.solr_url,
+                    '-s', f'processing_thread_pool={self.processing_thread_pool}',
+                    '-s', f'solr_writer.thread_pool={self.solr_writer_thread_pool}',
+                    '-s', f'solr_writer.batch_size={batch_size}',
+                    '-s', 'solr_writer.commit_on_close=false',
                     '-i', 'xml',
-                    '-c', traject_config
+                    '-c', traject_config,
                 ] + existing_files
 
                 self.log.info(f'  Indexing batch {batch_num}/{total_batches}: {len(existing_files)} files')
@@ -1320,17 +1344,17 @@ class ArcFlow:
         if (self.include_digital_objects and 
                 hasattr(self, 'use_archon') and self.use_archon == 2):
             try:
-                with open(self.omeka_file_path, 'r') as file:
+                with open(self.arcflow_config_file_path, 'r') as file:
                     lines = file.readlines()
-                with open(self.omeka_file_path, 'w') as file:
+                with open(self.arcflow_config_file_path, 'w') as file:
                     for line in lines:
                         if re.match(r'^\s*use_archon\s*:', line):
                             file.write('use_archon: 0\n')
                         else:
                             file.write(line)
-                    self.log.info(f'Updated file .omeka.yml.')
+                    self.log.info(f'Updated file .arcflow.config.yml.')
             except Exception as e:
-                self.log.error(f'Error writing to file .omeka.yml: {e}')
+                self.log.error(f'Error writing to file .arcflow.config.yml: {e}')
 
     def run_digital_objects(self, modified_since, num_processes):
         """
@@ -1430,12 +1454,11 @@ class ArcFlow:
 
         # Make sure that the combined sum of num_processes across all parallel 
         # workflows does not exceed max_processes:
-        # 3 processes for collections and 1 for creators is an empirically derived
-        # ratio based on typical processing times, amount of memory and CPU power of the server.
-        # Adjust as needed based on your environment and data.
-        # but this can be adjusted as needed.
+        # 1 process for creators is an empirically derived ratio based on
+        # typical processing times, amount of memory and CPU power of the
+        # server. Adjust as needed based on your environment and data.
         workflows = [
-            (self.run_collections, modified_since_scope['collections'], 3),
+            (self.run_collections, modified_since_scope['collections'], (self.max_processes-1)),
             (self.run_creators, modified_since_scope['creators'], 1)
         ]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(workflows)) as executor:
@@ -1493,64 +1516,52 @@ class ArcFlow:
             subject = f'ArcFlow process completed with critical errors (PID: {self.pid})'
             body = f'Critical errors occurred in the last ArcFlow run. Please see details below for more information. Resolve the reported issues to avoid possible data integrity impacts. Once resolved, delete /opt/arclight/arcflow/logs/error.log in the server (or rename it if you want to keep a record of past errors) so ArcFlow can resume normal operation.\n\nDetails:\n{errors}'
             self.log.info(f'Critical errors occurred. Sending email alert to {self.email_to}')
-            if not _sendmail(self.email_from, self.email_to, subject, body):
+            if not self._sendmail(self.email_from, self.email_to, subject, body):
                 self.log.error(f'Failed to send email to {self.email_to}.')
             else:
                 self.log.info(f'Email sent to {self.email_to} with critical errors.')
 
 
-def _sendmail(from_address, to_address, subject, body):
-    """
-    Send an email using the sendmail command.
+    def _sendmail(self, from_address, to_address, subject, body):
+        """
+        Send an email using the sendmail command.
 
-    Args:
-        from_address (str): The sender's email address.
-        to_address (str): The recipient's email address (use space-separated list for multiple recipients).
-        subject (str): The subject of the email.
-        body (str): The body of the email.
+        Args:
+            from_address (str): The sender's email address.
+            to_address (str): The recipient's email address (use space-separated list for multiple recipients).
+            subject (str): The subject of the email.
+            body (str): The body of the email.
 
-    Returns:
-        bool: True if the email was sent successfully, False otherwise.
-    """
-    try:
-        # Prepare the email content
-        email_content = f"From: {from_address}\nTo: {to_address}\nSubject: {subject}\n\n{body}"
+        Returns:
+            bool: True if the email was sent successfully, False otherwise.
+        """
+        try:
+            # Prepare the email content
+            email_content = f"From: {from_address}\nTo: {to_address}\nSubject: {subject}\n\n{body}"
 
-        # Use subprocess to call sendmail
-        process = subprocess.Popen(
-            ['sendmail', to_address],
-            stdin=subprocess.PIPE,
-            text=True
-        )
-        process.communicate(email_content)
+            # Use subprocess to call sendmail
+            process = subprocess.Popen(
+                ['sendmail', to_address],
+                stdin=subprocess.PIPE,
+                text=True
+            )
+            process.communicate(email_content)
 
-        if process.returncode == 0:
-            return True
-        else:
+            if process.returncode == 0:
+                return True
+            else:
+                return False
+        except Exception as e:
+            self.log.error(f'Error sending email: {e}')
             return False
-    except Exception as e:
-        self.log.error(f'Error sending email: {e}')
-        return False
 
 
 def main():
     parser = argparse.ArgumentParser(description='ArcFlow')
     parser.add_argument(
-        '--arclight-dir',
-        required=True,
-        help='Path to ArcLight installation directory',)
-    parser.add_argument(
         '--force-update',
         action='store_true',
         help='Force update of data',)
-    parser.add_argument(
-        '--solr-url',
-        required=True,
-        help='URL of the ArcLight Solr core',)
-    parser.add_argument(
-        '--aspace-solr-url',
-        required=True,
-        help='URL of the ASpace Solr core',)
     parser.add_argument(
         '--ead-extra-config',
         default='',
@@ -1591,17 +1602,15 @@ def main():
     parser.add_argument(
         '--skip-resource-processing',
         action='store_true',
-        help='Skip processing of collection EADs (useful for testing)',
-    )
+        help='Skip processing of collection EADs (useful for testing)',)
     parser.add_argument(
         '--skip-collection-indexing',
         action='store_true',
-        help='Skip Solr indexing of collection records (useful for testing)',
-    )
+        help='Skip Solr indexing of collection records (useful for testing)',)
     parser.add_argument(
         '--dry-run-aspace',
         action='store_true',
-        help='Run the process without making any changes or triggering any jobs in ArchivesSpace (for testing purposes)',)        
+        help='Run the process without making any changes or triggering any jobs in ArchivesSpace (for testing purposes)',)
     args = parser.parse_args()
 
     # Validate mutually exclusive flags
@@ -1609,10 +1618,7 @@ def main():
         parser.error('Cannot use more than one of --agents-only, --collections-only, or --digital-objects-only')
 
     arcflow = ArcFlow(
-        arclight_dir=args.arclight_dir,
-        solr_url=args.solr_url,
         ead_extra_config=args.ead_extra_config,
-        aspace_solr_url=args.aspace_solr_url,
         force_update=args.force_update,
         agents_only=args.agents_only,
         collections_only=args.collections_only,

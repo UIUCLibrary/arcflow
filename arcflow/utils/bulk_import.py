@@ -13,20 +13,27 @@ from asnake.client import ASnakeClient
 def __get_asnake_client():
     """Function to create and return an ASnakeClient instance."""
     try:
-        with open('.archivessnake.yml', 'r') as file:
-            config = yaml.safe_load(file)
+        with open('.arcflow.config.yml', 'r') as file:
+            config = yaml.safe_load(file) or {}
     except FileNotFoundError:
-        print('File .archivessnake.yml not found. Create the file.')
+        print('File .arcflow.config.yml not found. Create the file.')
+        exit(0)
+    except yaml.YAMLError as e:
+        print(f'Error parsing .arcflow.config.yml: {e}')
         exit(0)
 
     try:
+        aspace_config = config['archivesspace']
         client = ASnakeClient(
-            username=config['username'],
-            password=config['password'],
-            baseurl=config['baseurl'],
+            username=aspace_config['username'],
+            password=aspace_config['password'],
+            baseurl=aspace_config['baseurl'],
         )
         client.authorize()
         return client
+    except KeyError as e:
+        print(f'Missing required archivesspace config key {e} in .arcflow.config.yml.')
+        exit(0)
     except Exception as e:
         print(f'Error authorizing ASnakeClient: {e}')
         exit(0)
