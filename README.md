@@ -169,7 +169,7 @@ See the original installation instructions in your deployment documentation.
 ## Configuration
 
 - `.archivessnake.yml` - ArchivesSpace API credentials
-- `.arcflow.yml` - Last update timestamp tracking
+- `.arcflow.state.yml` - Machine-managed run state (auto-generated/updated by ArcFlow; tracks timestamps used for incremental processing). Not meant to be edited manually.
 
 ## Usage
 

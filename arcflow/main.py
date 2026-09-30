@@ -107,7 +107,7 @@ class ArcFlow:
         self.log = logging.getLogger('arcflow')
         self.pid = os.getpid()
         self.pid_file_path = os.path.join(base_dir, 'arcflow.pid')
-        self.arcflow_file_path = os.path.join(base_dir, '.arcflow.yml')
+        self.arcflow_state_file_path = os.path.join(base_dir, '.arcflow.state.yml')
         self.omeka_file_path = os.path.join(base_dir, '.omeka.yml')
         if self.is_running():
             self.log.info(f'ArcFlow process previously started still running. Exiting (PID: {self.pid}).')
@@ -117,7 +117,7 @@ class ArcFlow:
 
         self.start_time = int(time.time())
         try:
-            with open(self.arcflow_file_path, 'r') as file:
+            with open(self.arcflow_state_file_path, 'r') as file:
                 config = yaml.safe_load(file) or {}
             try:
                 date_fmt = '%Y-%m-%dT%H:%M:%S%z'
@@ -130,11 +130,11 @@ class ArcFlow:
                 self.last_updated_creators = datetime.strptime(creators_ts_str, date_fmt) if creators_ts_str else epoch
                 self.last_updated_digital_objects = datetime.strptime(digital_objects_ts_str, date_fmt) if digital_objects_ts_str else epoch
             except Exception as e:
-                self.log.error(f'Error parsing last_updated date on file .arcflow.yml: {e}')
+                self.log.error(f'Error parsing last_updated date on file .arcflow.state.yml: {e}')
                 exit(1)
         except FileNotFoundError:
             if not self.force_update:
-                self.log.error('File .arcflow.yml not found. Create the file and try again or run with --force-update to recreate EADs from scratch.')
+                self.log.error('File .arcflow.state.yml not found. Create the file and try again or run with --force-update to recreate EADs from scratch.')
                 exit(1)
             else:
                 self.last_updated_collections = datetime.fromtimestamp(0, timezone.utc)
@@ -1283,7 +1283,7 @@ class ArcFlow:
 
     def save_config_file(self, scope):
         """
-        Save the last updated timestamps to the .arcflow.yml file.
+        Save the last updated timestamps to the .arcflow.state.yml file.
         Each type (collections, creators, digital_objects) has its own timestamp so they
         can be run independently without overwriting each other's state.
 
@@ -1291,13 +1291,13 @@ class ArcFlow:
             Determines which timestamps are updated based on which record types are in scope.
         """
         if self.skip_timestamp_update:
-            self.log.info('Skipping update of .arcflow.yml configuration file. (--skip-timestamp-update flag set)')
+            self.log.info('Skipping update of .arcflow.state.yml state file. (--skip-timestamp-update flag set)')
             return
 
         try:
             # Preserve timestamps for record types not processed in this run
             try:
-                with open(self.arcflow_file_path, 'r') as file:
+                with open(self.arcflow_state_file_path, 'r') as file:
                     config = yaml.safe_load(file) or {}
             except FileNotFoundError:
                 config = {}
@@ -1310,11 +1310,11 @@ class ArcFlow:
             if scope in ('digital_objects', 'all'):
                 config['last_updated_digital_objects'] = self.last_updated_digital_objects.strftime('%Y-%m-%dT%H:%M:%S%z')
 
-            with open(self.arcflow_file_path, 'w') as file:
+            with open(self.arcflow_state_file_path, 'w') as file:
                 yaml.dump(config, file)
-                self.log.info(f'Saved file .arcflow.yml.')
+                self.log.info(f'Saved file .arcflow.state.yml.')
         except Exception as e:
-            self.log.error(f'Error writing to file .arcflow.yml: {e}')
+            self.log.error(f'Error writing to file .arcflow.state.yml: {e}')
 
         # disable Archon integration if it was enabled for a single run
         if (self.include_digital_objects and 
@@ -1587,7 +1587,7 @@ def main():
     parser.add_argument(
         '--skip-timestamp-update',
         action='store_true',
-        help='Skip updating last updated timestamps in .arcflow.yml (useful for testing)',)
+        help='Skip updating last updated timestamps in .arcflow.state.yml (useful for testing)',)
     parser.add_argument(
         '--skip-resource-processing',
         action='store_true',

@@ -56,8 +56,8 @@ MANIFEST
 # ArchivesSnake configuration file
 .archivessnake.yml
 
-# ArcFlow configuration file
-.arcflow.yml
+# ArcFlow state file
+.arcflow.state.yml
 
 # Omeka configuration file
 .omeka.yml
