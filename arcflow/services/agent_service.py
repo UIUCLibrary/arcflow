@@ -73,7 +73,8 @@ class AgentService:
             agent_uri: Agent URI for logging purposes
 
         Returns:
-            List of plain text paragraph strings (not wrapped in <p> tags)
+            List of paragraph strings (not wrapped in <p> tags), which may contain
+            inline EAD markup from ArchivesSpace (e.g. <emph render="italic">)
         """
         paragraphs = []
 
@@ -97,7 +98,7 @@ class AgentService:
                         )
                         continue
 
-                    # Add plain text lines (will be wrapped in <p> tags by build_bioghist_element)
+                    # Add lines as-is (wrapped in <p> tags by build_bioghist_element)
                     for line in lines:
                         paragraphs.append(line)
 

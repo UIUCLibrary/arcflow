@@ -69,7 +69,13 @@ When injecting content into EAD XML files, distinguish between plain text and st
   - Content from ArchivesSpace already contains valid EAD XML markup (`<emph>`, `<title>`, etc.)
   - These are legitimate XML nodes that must be preserved
   - Escaping would convert them to literal text: `<emph>` → `&lt;emph&gt;`
-  - Example: Pass through as-is: `f'<p>{subnote["content"]}</p>'`
+  - Use `XmlTransformService._set_mixed_content()` to keep well-formed markup as nodes;
+    it treats bare `&` as text and falls back to escaping if the content still isn't
+    well-formed (e.g. `"x < y"`), so plain text can't break the XML
+
+- **EAC-CPF from ArchivesSpace**: the exporter writes note text as escaped character data,
+  so `<biogHist>` paragraphs contain `&lt;emph&gt;`. `restore_bioghist_markup_in_eac_cpf()`
+  turns that back into XML nodes before indexing.
 
 ### Why This Matters
 
