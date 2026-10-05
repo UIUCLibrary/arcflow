@@ -326,6 +326,72 @@ class TestXmlTransformService(unittest.TestCase):
         self.assertIn('<p>Content with &amp; ampersand</p>', result)
         self.assertIn('<p>Content with &lt;tags&gt; and "quotes"</p>', result)
 
+    def test_build_bioghist_element_preserves_inline_markup(self):
+        """Test that well-formed inline EAD markup in paragraphs is kept as XML nodes."""
+        result = self.service.build_bioghist_element(
+            agent_name='Test Agent',
+            persistent_id='abc',
+            paragraphs=[
+                'Publisher of <emph render="italic">The Daily Illini</emph>.',
+                '<title render="bold">Annual Report</title> follows'
+            ]
+        )
+
+        self.assertIn('<p>Publisher of <emph render="italic">The Daily Illini</emph>.</p>', result)
+        self.assertIn('<p><title render="bold">Annual Report</title> follows</p>', result)
+        self.assertNotIn('&lt;emph', result)
+
+    def test_build_bioghist_element_preserves_markup_with_bare_ampersand(self):
+        """Test that a bare ampersand does not force escaping of other markup."""
+        result = self.service.build_bioghist_element(
+            agent_name='Test Agent',
+            persistent_id='abc',
+            paragraphs=['<emph render="italic">Smith & Sons</emph> &amp; partners']
+        )
+
+        self.assertIn(
+            '<p><emph render="italic">Smith &amp; Sons</emph> &amp; partners</p>', result
+        )
+
+    def test_build_bioghist_element_escapes_malformed_markup(self):
+        """Test that content which is not well-formed XML is escaped as plain text."""
+        result = self.service.build_bioghist_element(
+            agent_name='Test Agent',
+            persistent_id='abc',
+            paragraphs=['x < y and <emph>unclosed']
+        )
+
+        self.assertIn('<p>x &lt; y and &lt;emph&gt;unclosed</p>', result)
+
+    def test_build_bioghist_element_preserves_xlink_markup(self):
+        """Test that inline markup using the xlink prefix parses and is preserved."""
+        result = self.service.build_bioghist_element(
+            agent_name='Test Agent',
+            persistent_id='abc',
+            paragraphs=['See <extref xlink:href="https://example.org">site</extref>']
+        )
+
+        self.assertIn('xlink:href="https://example.org"', result)
+        self.assertIn('>site</extref></p>', result)
+
+    def test_inject_collection_metadata_preserves_bioghist_inline_markup(self):
+        """Test that inline markup survives injection into a namespaced EAD."""
+        bioghist = self.service.build_bioghist_element(
+            agent_name='Test Agent',
+            persistent_id='abc',
+            paragraphs=['Publisher of <emph render="italic">The Daily Illini</emph>']
+        )
+
+        result = self.service.inject_collection_metadata(
+            REAL_EAD_WITH_NAMESPACE,
+            record_group=None,
+            subgroup=None,
+            bioghist_content=bioghist
+        )
+
+        self.assertIn('<p>Publisher of <emph render="italic">The Daily Illini</emph></p>', result)
+        self.assertNotIn('xmlns=""', result)
+
     def test_validate_eac_cpf_xml_valid(self):
         """Test validating valid EAC-CPF XML."""
         eac_cpf_xml = '<eac-cpf><control></control></eac-cpf>'

@@ -14,6 +14,12 @@ from lxml import etree
 import logging
 
 
+XLINK_NS = 'http://www.w3.org/1999/xlink'
+
+# Matches '&' that does not start a predefined XML entity or a numeric character reference
+_BARE_AMPERSAND = re.compile(r'&(?!(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);)')
+
+
 class XmlTransformService:
     """Service for XML transformations and manipulations."""
 
@@ -382,7 +388,9 @@ class XmlTransformService:
         Args:
             agent_name: Name of the agent for the head element
             persistent_id: Persistent ID for the bioghist element (optional)
-            paragraphs: List of plain text paragraph strings (will be wrapped in <p> tags with proper escaping)
+            paragraphs: List of paragraph strings (wrapped in <p> tags). Well-formed inline
+                EAD markup (e.g. <emph render="italic">) is preserved; anything else is
+                escaped as plain text.
 
         Returns:
             str: Bioghist XML element as a string
@@ -398,14 +406,54 @@ class XmlTransformService:
         head = etree.SubElement(bioghist, 'head')
         head.text = f'Historical Note from {agent_name} Creator Record'
         
-        # Create <p> elements from plain text paragraphs
-        # lxml automatically handles XML escaping
+        # Create <p> elements from paragraphs, keeping inline EAD markup from
+        # ArchivesSpace as XML nodes (escaping it would show raw tags in ArcLight)
         for paragraph_text in paragraphs:
             p = etree.SubElement(bioghist, 'p')
-            p.text = paragraph_text
+            self._set_mixed_content(p, paragraph_text)
         
         # Convert to string (no XML declaration for fragments)
         return etree.tostring(bioghist, encoding='unicode', method='xml')
+
+    def _set_mixed_content(self, elem: 'etree._Element', content: str) -> bool:
+        """
+        Set content on elem, preserving well-formed inline markup as child nodes.
+
+        Bare '&' characters (e.g. "Smith & Sons") are treated as literal text so they
+        don't prevent markup elsewhere in the content from being preserved. If the
+        content is still not well-formed (e.g. "x < y" or an unclosed tag), it is
+        assigned as plain text and lxml escapes it on serialization.
+
+        Parsed child elements inherit elem's namespace so they serialize cleanly
+        inside namespaced documents (e.g. EAC-CPF).
+
+        Args:
+            elem: Element with no children whose text will be set
+            content: Paragraph content that may contain inline markup
+
+        Returns:
+            bool: True if the content was parsed as markup, False if set as plain text
+        """
+        if '<' not in content and '&' not in content:
+            elem.text = content
+            return False
+
+        default_ns = ''
+        if isinstance(elem.tag, str) and elem.tag.startswith('{'):
+            default_ns = f' xmlns="{elem.tag[1:].split("}")[0]}"'
+        fragment = _BARE_AMPERSAND.sub('&amp;', content)
+        try:
+            wrapper = etree.fromstring(
+                f'<wrapper{default_ns} xmlns:xlink="{XLINK_NS}">{fragment}</wrapper>'.encode('utf-8')
+            )
+        except etree.XMLSyntaxError:
+            elem.text = content
+            return False
+
+        elem.text = wrapper.text
+        for child in list(wrapper):
+            elem.append(child)
+        return True
 
     def validate_eac_cpf_xml(self, eac_cpf_xml: str, agent_uri: str) -> Optional['etree._Element']:
         """
