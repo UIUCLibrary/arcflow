@@ -958,6 +958,9 @@ class ArcFlow:
             # Add collection ead_ids to resourceRelation creatorOf elements
             eac_cpf_xml = self.xml_transform.add_collection_links_to_eac_cpf(eac_cpf_xml)
 
+            # Turn escaped style markup in biogHist (e.g. &lt;emph&gt;) back into XML nodes
+            eac_cpf_xml = self.xml_transform.restore_bioghist_markup_in_eac_cpf(eac_cpf_xml)
+
             # Generate creator ID
             creator_id = f'creator_{agent_type}_{agent_id}'
 

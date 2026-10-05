@@ -376,6 +376,62 @@ class XmlTransformService:
             self.log.error(f'Failed to parse EAC-CPF XML: {e}. Returning original content.')
             return original_xml
 
+    def restore_bioghist_markup_in_eac_cpf(self, eac_cpf_xml: str) -> str:
+        """
+        Convert escaped inline markup in EAC-CPF <biogHist> paragraphs back into XML nodes.
+
+        ArchivesSpace's EAC-CPF exporter writes note text as escaped character data, so
+        style markup such as <emph render="italic"> arrives as &lt;emph ...&gt; and would
+        be displayed as raw tags. Paragraphs whose text is well-formed markup are re-parsed
+        into child nodes; paragraphs that are plain text, already contain child elements,
+        or are not well-formed are left unchanged.
+
+        Args:
+            eac_cpf_xml: EAC-CPF XML as a string
+
+        Returns:
+            str: Modified EAC-CPF XML string, or the original if nothing changed
+        """
+        original_xml = eac_cpf_xml
+
+        try:
+            parser = etree.XMLParser(remove_blank_text=False)
+            try:
+                root = etree.fromstring(eac_cpf_xml.encode('utf-8'), parser)
+            except etree.ParseError:
+                # If parsing fails, it might be due to undeclared namespaces
+                if 'xlink:' in eac_cpf_xml and 'xmlns:xlink' not in eac_cpf_xml:
+                    eac_cpf_xml = eac_cpf_xml.replace('<eac-cpf>', f'<eac-cpf xmlns:xlink="{XLINK_NS}">', 1)
+                root = etree.fromstring(eac_cpf_xml.encode('utf-8'), parser)
+
+            namespace = ''
+            if root.tag.startswith('{'):
+                namespace = root.tag.split('}')[0] + '}'
+
+            changes_made = False
+            for bioghist in root.iter(f'{namespace}biogHist'):
+                for p in list(bioghist.iter(f'{namespace}p')):
+                    if len(p) or not p.text or '<' not in p.text:
+                        continue
+                    if self._set_mixed_content(p, p.text):
+                        changes_made = True
+
+            if not changes_made:
+                return original_xml
+
+            result_bytes = etree.tostring(
+                root,
+                encoding='UTF-8',
+                method='xml',
+                pretty_print=False,
+                xml_declaration=True
+            )
+            return result_bytes.decode('utf-8')
+
+        except etree.ParseError as e:
+            self.log.error(f'Failed to parse EAC-CPF XML: {e}. Returning original content.')
+            return original_xml
+
     def build_bioghist_element(
         self,
         agent_name: str,

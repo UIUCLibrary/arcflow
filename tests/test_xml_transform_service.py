@@ -38,6 +38,27 @@ REAL_EAC_CPF_WITH_NAMESPACE = '''<?xml version="1.0" encoding="UTF-8"?>
   </cpfDescription>
 </eac-cpf>'''
 
+# EAC-CPF fixture mirroring ArchivesSpace's exporter, which writes note text
+# (including inline EAD markup) as escaped character data
+REAL_EAC_CPF_WITH_ESCAPED_BIOGHIST = '''<?xml version="1.0" encoding="UTF-8"?>
+<eac-cpf xmlns="urn:isbn:1-931666-33-4" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <control>
+    <recordId>test-agent</recordId>
+  </control>
+  <cpfDescription>
+    <description>
+      <biogHist>
+        <p>Publisher of &lt;emph render="italic"&gt;The Daily Illini&lt;/emph&gt; &amp; more.</p>
+        <p>Founded in 1871 &amp; still active.</p>
+        <p>x &lt; y</p>
+      </biogHist>
+      <mandate>
+        <p>Mandate &lt;emph&gt;text&lt;/emph&gt;</p>
+      </mandate>
+    </description>
+  </cpfDescription>
+</eac-cpf>'''
+
 class TestXmlTransformService(unittest.TestCase):
     """Test cases for XmlTransformService."""
 
@@ -391,6 +412,55 @@ class TestXmlTransformService(unittest.TestCase):
 
         self.assertIn('<p>Publisher of <emph render="italic">The Daily Illini</emph></p>', result)
         self.assertNotIn('xmlns=""', result)
+
+    def test_restore_bioghist_markup_in_eac_cpf(self):
+        """Test that escaped inline markup in EAC-CPF biogHist paragraphs becomes XML nodes."""
+        result = self.service.restore_bioghist_markup_in_eac_cpf(REAL_EAC_CPF_WITH_ESCAPED_BIOGHIST)
+
+        self.assertIn(
+            '<p>Publisher of <emph render="italic">The Daily Illini</emph> &amp; more.</p>',
+            result
+        )
+        bioghist_section = result.split('<biogHist>')[1].split('</biogHist>')[0]
+        self.assertNotIn('&lt;emph', bioghist_section)
+        self.assertNotIn('xmlns=""', result)
+        # Plain text and malformed paragraphs are left unchanged
+        self.assertIn('<p>Founded in 1871 &amp; still active.</p>', result)
+        self.assertIn('<p>x &lt; y</p>', result)
+
+    def test_restore_bioghist_markup_in_eac_cpf_uses_eac_namespace(self):
+        """Test that restored inline elements are placed in the EAC-CPF namespace."""
+        from lxml import etree
+
+        result = self.service.restore_bioghist_markup_in_eac_cpf(REAL_EAC_CPF_WITH_ESCAPED_BIOGHIST)
+        root = etree.fromstring(result.encode('utf-8'))
+
+        ns = {'eac': 'urn:isbn:1-931666-33-4'}
+        emph = root.xpath('//eac:biogHist/eac:p/eac:emph', namespaces=ns)
+        self.assertEqual(len(emph), 1)
+        self.assertEqual(emph[0].text, 'The Daily Illini')
+        self.assertEqual(emph[0].tail, ' & more.')
+
+    def test_restore_bioghist_markup_in_eac_cpf_ignores_other_notes(self):
+        """Test that paragraphs outside biogHist are not modified."""
+        result = self.service.restore_bioghist_markup_in_eac_cpf(REAL_EAC_CPF_WITH_ESCAPED_BIOGHIST)
+
+        self.assertIn('<p>Mandate &lt;emph&gt;text&lt;/emph&gt;</p>', result)
+
+    def test_restore_bioghist_markup_in_eac_cpf_no_changes_returns_original(self):
+        """Test that the original XML is returned unchanged when there is no markup to restore."""
+        result = self.service.restore_bioghist_markup_in_eac_cpf(REAL_EAC_CPF_WITH_NAMESPACE)
+
+        self.assertEqual(result, REAL_EAC_CPF_WITH_NAMESPACE)
+
+    def test_restore_bioghist_markup_in_eac_cpf_invalid_xml(self):
+        """Test that invalid XML is returned unchanged and an error is logged."""
+        eac_cpf_xml = '<eac-cpf><control>'
+
+        result = self.service.restore_bioghist_markup_in_eac_cpf(eac_cpf_xml)
+
+        self.assertEqual(result, eac_cpf_xml)
+        self.mock_log.error.assert_called()
 
     def test_validate_eac_cpf_xml_valid(self):
         """Test validating valid EAC-CPF XML."""
