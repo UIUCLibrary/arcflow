@@ -15,7 +15,7 @@ from asnake.client import ASnakeClient
 def get_asnake_client():
     """Creates and returns an authenticated ASnakeClient.
 
-    Loads credentials from .archivessnake.yml and authorizes the client.
+    Loads credentials from .arcflow.config.yml and authorizes the client.
 
     Returns:
         ASnakeClient: An authenticated ArchivesSpace client.
@@ -24,20 +24,27 @@ def get_asnake_client():
         SystemExit: If config file is missing or authentication fails.
     """
     try:
-        with open('.archivessnake.yml', 'r') as file:
-            config = yaml.safe_load(file)
+        with open('.arcflow.config.yml', 'r') as file:
+            config = yaml.safe_load(file) or {}
     except FileNotFoundError:
-        print('Error: .archivessnake.yml not found.')
+        print('Error: .arcflow.config.yml not found.')
+        exit(1)
+    except yaml.YAMLError as e:
+        print(f'Error parsing .arcflow.config.yml: {e}')
         exit(1)
 
     try:
+        aspace_config = config['archivesspace']
         client = ASnakeClient(
-            username=config['username'],
-            password=config['password'],
-            baseurl=config['baseurl'],
+            username=aspace_config['username'],
+            password=aspace_config['password'],
+            baseurl=aspace_config['baseurl'],
         )
         client.authorize()
         return client
+    except KeyError as e:
+        print(f'Missing required archivesspace config key {e} in .arcflow.config.yml.')
+        exit(1)
     except Exception as error:
         print(f'Error authorizing ASnakeClient: {error}')
         exit(1)
