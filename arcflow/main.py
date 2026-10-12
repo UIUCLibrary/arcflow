@@ -1341,8 +1341,7 @@ class ArcFlow:
             self.log.error(f'Error writing to file .arcflow.state.yml: {e}')
 
         # disable Archon integration if it was enabled for a single run
-        if (self.include_digital_objects and 
-                hasattr(self, 'use_archon') and self.use_archon == 2):
+        if (hasattr(self, 'use_archon') and self.use_archon == 2):
             try:
                 with open(self.arcflow_config_file_path, 'r') as file:
                     lines = file.readlines()
