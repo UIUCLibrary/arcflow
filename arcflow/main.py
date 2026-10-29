@@ -649,6 +649,27 @@ class ArcFlow:
         return
 
 
+    def get_deleted_records(self, modified_since):
+        """
+        Get the URIs of the records deleted in ArchivesSpace since
+        modified_since from the delete-feed-restricted endpoint.
+        """
+        page = 1
+        while True:
+            deleted_records = self.client.get(
+                '/delete-feed-restricted',
+                params={
+                    'page': page,
+                    'modified_since': modified_since,
+                }
+            ).json()
+            yield from deleted_records['results']
+
+            if deleted_records['last_page'] == page:
+                break
+            page += 1
+
+
     def process_deleted_records(self, modified_since_scope):
         """
         Process records deleted in ArchivesSpace since the last run.
@@ -678,49 +699,36 @@ class ArcFlow:
         object_pattern = r'^/repositories/(?P<repo_id>\d+)/(?P<object_type>resources|digital_objects)/(?P<record_id>\d+)$'
         agent_pattern = r'^/agents/(?P<agent_type>people|corporate_entities|families)/(?P<record_id>\d+)$'
 
-        page = 1
-        while True:
-            deleted_records = self.client.get(
-                '/delete-feed-restricted',
-                params={
-                    'page': page,
-                    'modified_since': modified_since,
-                }
-            ).json()
-            for record in deleted_records['results']:
-                object_match = re.match(object_pattern, record)
-                agent_match = re.match(agent_pattern, record)
+        for record in self.get_deleted_records(modified_since):
+            object_match = re.match(object_pattern, record)
+            agent_match = re.match(agent_pattern, record)
 
-                if object_match and scope in ('collections', 'digital_objects','all'):
-                    object_id = object_match.group('record_id')
-                    object_type = object_match.group('object_type')
-                    if object_type == 'resources' and scope in ('collections', 'all'):
-                        self.log.info(f'Processing deleted resource ID {object_id}...')
-                        symlink_path = f'{resource_dir}/{object_id}.xml'
-                        ead_id = self.get_ead_from_symlink(symlink_path)
-                        if ead_id:
-                            self.delete_ead(
-                                object_id,
-                                ead_id.replace('.', '-'),  # dashes in Solr
-                                f'{resource_dir}/{ead_id}.xml',  # dots in filenames
-                                f'{pdf_dir}/{ead_id}.pdf')
-                        else:
-                            self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
-                    elif object_type == 'digital_objects' and scope in ('digital_objects', 'all'):
-                        self.log.info(f'Processing deleted digital object ID {object_id}...')
-                        self.omeka.delete(record)
+            if object_match and scope in ('collections', 'digital_objects','all'):
+                object_id = object_match.group('record_id')
+                object_type = object_match.group('object_type')
+                if object_type == 'resources' and scope in ('collections', 'all'):
+                    self.log.info(f'Processing deleted resource ID {object_id}...')
+                    symlink_path = f'{resource_dir}/{object_id}.xml'
+                    ead_id = self.get_ead_from_symlink(symlink_path)
+                    if ead_id:
+                        self.delete_ead(
+                            object_id,
+                            ead_id.replace('.', '-'),  # dashes in Solr
+                            f'{resource_dir}/{ead_id}.xml',  # dots in filenames
+                            f'{pdf_dir}/{ead_id}.pdf')
+                    else:
+                        self.log.error(f'Symlink {symlink_path} not found. Unable to delete the associated EAD from ArcLight Solr.')
+                elif object_type == 'digital_objects' and scope in ('digital_objects', 'all'):
+                    self.log.info(f'Processing deleted digital object ID {object_id}...')
+                    self.omeka.delete(record)
 
-                if agent_match and scope in ('creators', 'all'):
-                    agent_type = agent_match.group('agent_type')
-                    agent_id = agent_match.group('record_id')
-                    self.log.info(f'Processing deleted agent ID {agent_id}...')
-                    file_path = f'{agent_dir}/{agent_id}.xml'
-                    agent_solr_id = f'creator_{agent_type}_{agent_id}'
-                    self.delete_creator(file_path, agent_solr_id)
-
-            if deleted_records['last_page'] == page:
-                break
-            page += 1
+            if agent_match and scope in ('creators', 'all'):
+                agent_type = agent_match.group('agent_type')
+                agent_id = agent_match.group('record_id')
+                self.log.info(f'Processing deleted agent ID {agent_id}...')
+                file_path = f'{agent_dir}/{agent_id}.xml'
+                agent_solr_id = f'creator_{agent_type}_{agent_id}'
+                self.delete_creator(file_path, agent_solr_id)
 
 
     def index_collections(self, repo_id, xml_dir):

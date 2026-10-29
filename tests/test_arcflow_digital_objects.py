@@ -152,5 +152,42 @@ class TestIndexCollections(unittest.TestCase):
                 traject_cmd[traject_cmd.index(f'arcuit.digital_objects_dir={resource_dir}/digital_objects') - 1], '-s')
 
 
+class TestDeletedRecords(unittest.TestCase):
+
+    def pages(self, *pages):
+        responses = [
+            Mock(**{'json.return_value': {'results': results, 'last_page': len(pages)}})
+            for results in pages
+        ]
+        return Mock(side_effect=responses)
+
+    def test_get_deleted_records_pages(self):
+        arcflow = make_arcflow()
+        arcflow.client.get = self.pages(['/repositories/2/digital_objects/1'], ['/agents/people/3'])
+
+        self.assertEqual(
+            list(arcflow.get_deleted_records(1700000000)),
+            ['/repositories/2/digital_objects/1', '/agents/people/3'])
+        self.assertEqual(
+            [c.kwargs['params'] for c in arcflow.client.get.call_args_list],
+            [{'page': 1, 'modified_since': 1700000000}, {'page': 2, 'modified_since': 1700000000}])
+        for c in arcflow.client.get.call_args_list:
+            self.assertEqual(c.args, ('/delete-feed-restricted',))
+
+    def test_process_deleted_records_uses_feed(self):
+        arcflow = make_arcflow(
+            arclight_dir='/arclight', skip_deleted_record_processing=False, omeka=Mock())
+        arcflow.client.get = self.pages(
+            ['/repositories/2/digital_objects/1'], ['/agents/people/3'])
+        arcflow.delete_creator = Mock()
+
+        arcflow.process_deleted_records({'collections': 10, 'creators': 20, 'digital_objects': 5})
+
+        arcflow.omeka.delete.assert_called_once_with('/repositories/2/digital_objects/1')
+        arcflow.delete_creator.assert_called_once_with(
+            '/arclight/public/xml/agents/3.xml', 'creator_people_3')
+        self.assertEqual(arcflow.client.get.call_args_list[0].kwargs['params']['modified_since'], 5)
+
+
 if __name__ == '__main__':
     unittest.main()
