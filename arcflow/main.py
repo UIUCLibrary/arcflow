@@ -21,6 +21,7 @@ from utils.stage_classifications import extract_labels
 from services.xml_transform_service import XmlTransformService
 from services.agent_service import AgentService
 from services.omeka.omeka_service import OmekaService
+from services.digital_object_mods_service import DigitalObjectModsService
 
 base_dir = os.path.abspath((__file__) + "/../../")
 error_log_file = os.path.join(base_dir, 'logs/error.log')
@@ -206,6 +207,7 @@ class ArcFlow:
 
         self.xml_transform = XmlTransformService(client=self.client, log=self.log)
         self.agent_service = AgentService(client=self.client, log=self.log)
+        self.digital_object_mods = DigitalObjectModsService(client=self.client, log=self.log)
 
 
     def is_running(self):
@@ -413,6 +415,8 @@ class ArcFlow:
 
             os.makedirs(xml_dir, exist_ok=True)
             self.save_file(xml_file_path, xml_content, 'XML')
+            self.save_digital_object_mods(repo, resource, xml_content,
+                self.get_mods_file_path(xml_file_path))
             self.create_symlink(
                 os.path.basename(xml_file_path),
                 f'{os.path.dirname(xml_file_path)}/{resource_id}.xml')
@@ -426,6 +430,32 @@ class ArcFlow:
                 ead_id,
                 xml_file_path,
                 f'{pdf_dir}/{resource["ead_id"]}.pdf')
+
+
+    def save_digital_object_mods(self, repo, resource, ead, mods_file_path):
+        """
+        Save the MODS sidecar Arcuit indexes with the collection's EAD: the
+        metadata of the published digital objects linked to the resource or
+        to the archival objects in the EAD. Removes the sidecar if there are
+        none.
+        """
+        try:
+            archival_object_uris = self.digital_object_mods.archival_object_uris_from_ead(ead)
+            digital_objects = self.digital_object_mods.get_published_digital_objects(
+                repo['uri'], resource, archival_object_uris)
+            mods = self.digital_object_mods.build_mods_collection(digital_objects, resource['uri'])
+        except Exception as e:
+            # don't index the collection with a previous sidecar, which can
+            # list digital objects that have since been unpublished
+            self.log.critical(f'Error exporting digital objects of resource {resource["uri"]} to MODS: {e}. The collection will be indexed without digital object metadata.')
+            mods = None
+
+        if mods:
+            os.makedirs(os.path.dirname(mods_file_path), exist_ok=True)
+            return self.save_file(mods_file_path, mods, 'MODS')
+        if os.path.isfile(mods_file_path):
+            self.delete_file(mods_file_path)
+        return True
 
 
     def get_digital_objects_from_children(self, repo, modified_since):
@@ -1214,6 +1244,16 @@ class ArcFlow:
             ead_id = os.path.splitext(os.path.basename(real_path))[0]
 
         return ead_id
+
+
+    def get_mods_file_path(self, xml_file_path):
+        """
+        Get the path of the digital object MODS sidecar for an EAD file:
+        <xml dir>/digital_objects/<ead_id>.mods.xml
+        """
+        xml_dir, xml_file_name = os.path.split(xml_file_path)
+        ead_id = os.path.splitext(xml_file_name)[0]
+        return f'{xml_dir}/digital_objects/{ead_id}.mods.xml'
 
 
     def request_pdf_job(self, repo_uri, resource_id):

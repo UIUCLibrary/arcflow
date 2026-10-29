@@ -1,0 +1,96 @@
+"""
+Tests for ArcFlow's handling of digital object MODS sidecars.
+"""
+
+import os
+import tempfile
+import unittest
+from unittest.mock import Mock
+
+from main import ArcFlow
+
+
+def make_arcflow(**attrs):
+    """Build an ArcFlow without running __init__ (which reads config and logs in)."""
+    arcflow = ArcFlow.__new__(ArcFlow)
+    arcflow.log = Mock()
+    arcflow.client = Mock()
+    arcflow.digital_object_mods = Mock()
+    for name, value in attrs.items():
+        setattr(arcflow, name, value)
+    return arcflow
+
+
+class TestSaveDigitalObjectMods(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.xml_dir = self.tmp.name
+        self.mods_file_path = f'{self.xml_dir}/digital_objects/UA.99.1.1.mods.xml'
+        self.repo = {'uri': '/repositories/2'}
+        self.resource = {'uri': '/repositories/2/resources/5'}
+        self.arcflow = make_arcflow()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_previous_sidecar(self):
+        os.makedirs(os.path.dirname(self.mods_file_path))
+        with open(self.mods_file_path, 'wb') as file:
+            file.write(b'<modsCollection/>')
+
+    def test_get_mods_file_path(self):
+        self.assertEqual(
+            self.arcflow.get_mods_file_path('/x/public/xml/resources/UA.99.1.1.xml'),
+            '/x/public/xml/resources/digital_objects/UA.99.1.1.mods.xml')
+
+    def test_saves_sidecar(self):
+        service = self.arcflow.digital_object_mods
+        service.archival_object_uris_from_ead.return_value = ['/repositories/2/archival_objects/7']
+        service.get_published_digital_objects.return_value = [({'uri': 'do'}, [])]
+        service.build_mods_collection.return_value = b'<modsCollection>new</modsCollection>'
+
+        self.assertTrue(self.arcflow.save_digital_object_mods(
+            self.repo, self.resource, b'<ead/>', self.mods_file_path))
+
+        service.archival_object_uris_from_ead.assert_called_once_with(b'<ead/>')
+        service.get_published_digital_objects.assert_called_once_with(
+            '/repositories/2', self.resource, ['/repositories/2/archival_objects/7'])
+        service.build_mods_collection.assert_called_once_with(
+            [({'uri': 'do'}, [])], '/repositories/2/resources/5')
+        with open(self.mods_file_path, 'rb') as file:
+            self.assertEqual(file.read(), b'<modsCollection>new</modsCollection>')
+
+    def test_removes_sidecar_when_no_digital_objects(self):
+        self.write_previous_sidecar()
+        self.arcflow.digital_object_mods.build_mods_collection.return_value = None
+
+        self.assertTrue(self.arcflow.save_digital_object_mods(
+            self.repo, self.resource, b'<ead/>', self.mods_file_path))
+
+        self.assertFalse(os.path.exists(self.mods_file_path))
+        self.arcflow.log.error.assert_not_called()
+
+    def test_no_sidecar_and_no_digital_objects(self):
+        self.arcflow.digital_object_mods.build_mods_collection.return_value = None
+
+        self.assertTrue(self.arcflow.save_digital_object_mods(
+            self.repo, self.resource, b'<ead/>', self.mods_file_path))
+
+        self.assertFalse(os.path.exists(os.path.dirname(self.mods_file_path)))
+        self.arcflow.log.error.assert_not_called()
+
+    def test_error_removes_previous_sidecar(self):
+        self.write_previous_sidecar()
+        self.arcflow.digital_object_mods.get_published_digital_objects.side_effect = RuntimeError('boom')
+
+        self.assertTrue(self.arcflow.save_digital_object_mods(
+            self.repo, self.resource, b'<ead/>', self.mods_file_path))
+
+        self.assertFalse(os.path.exists(self.mods_file_path))
+        self.arcflow.log.critical.assert_called_once()
+        self.assertIn('/repositories/2/resources/5', self.arcflow.log.critical.call_args[0][0])
+
+
+if __name__ == '__main__':
+    unittest.main()
