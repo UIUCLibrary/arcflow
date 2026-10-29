@@ -5,7 +5,7 @@ Tests for ArcFlow's handling of digital object MODS sidecars.
 import os
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from main import ArcFlow
 
@@ -128,6 +128,28 @@ class TestDeleteEad(unittest.TestCase):
 
         self.assertEqual(os.listdir(self.resource_dir), [])
         self.arcflow.log.error.assert_not_called()
+
+
+class TestIndexCollections(unittest.TestCase):
+
+    def test_passes_digital_objects_dir_to_traject(self):
+        with tempfile.TemporaryDirectory() as resource_dir:
+            open(f'{resource_dir}/UA.99.1.1.xml', 'w').close()
+            os.symlink('UA.99.1.1.xml', f'{resource_dir}/created_2_5.xml')
+            arcflow = make_arcflow(
+                arclight_dir='/arclight', solr_url='http://solr/core',
+                processing_thread_pool=1, solr_writer_thread_pool=1,
+                collection_batch_size=100, ead_extra_config=None)
+
+            with patch('main.subprocess.run') as run:
+                run.return_value = Mock(returncode=0, stdout='/gems/arclight\n')
+                self.assertTrue(arcflow.index_collections('2', resource_dir))
+
+            traject_cmd = run.call_args_list[1][0][0]
+            self.assertIn(
+                f'arcuit.digital_objects_dir={resource_dir}/digital_objects', traject_cmd)
+            self.assertEqual(
+                traject_cmd[traject_cmd.index(f'arcuit.digital_objects_dir={resource_dir}/digital_objects') - 1], '-s')
 
 
 if __name__ == '__main__':

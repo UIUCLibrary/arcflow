@@ -765,6 +765,8 @@ class ArcFlow:
                     '-s', f'solr_writer.thread_pool={self.solr_writer_thread_pool}',
                     '-s', f'solr_writer.batch_size={self.collection_batch_size}',
                     '-s', 'solr_writer.commit_on_close=false',
+                    # read by arcuit's EAD config to index the MODS sidecars
+                    '-s', f'arcuit.digital_objects_dir={os.path.abspath(xml_dir)}/digital_objects',
                     '-i', 'xml',
                     '-c', traject_config,
                 ]
