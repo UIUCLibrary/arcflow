@@ -21,7 +21,7 @@ from utils.stage_classifications import extract_labels
 from services.xml_transform_service import XmlTransformService
 from services.agent_service import AgentService
 from services.omeka.omeka_service import OmekaService
-from services.digital_object_mods_service import DigitalObjectModsService
+from services.digital_object_mods_service import DigitalObjectModsService, DIGITAL_OBJECT_URI
 
 base_dir = os.path.abspath((__file__) + "/../../")
 error_log_file = os.path.join(base_dir, 'logs/error.log')
@@ -506,6 +506,133 @@ class ArcFlow:
         return (repo, object_list)
 
 
+    def task_digital_object_collections(self, repo, modified_since,
+            deleted_digital_object_uris, resource_ids_by_ead):
+        """
+        Find the collections to export again because digital objects linked
+        to them were modified, unpublished, suppressed or deleted in
+        ArchivesSpace since modified_since, so their MODS sidecars are
+        updated.
+
+        Changing a digital object doesn't always update the resources it is
+        linked to (e.g. publishing it with the publish endpoint, suppressing
+        it, or, before ArchivesSpace v3.4.0, saving or deleting one linked to
+        an archival object), so the digital objects are traced to the
+        collections they are linked to now (their linked instances) and to
+        the collections they were indexed with (ArcLight Solr).
+
+        Returns:
+            set: Resource IDs
+        """
+        repo_id = self.get_repo_id(repo)
+        digital_object_ids = self.client.get(
+            f'{repo["uri"]}/digital_objects',
+            params={
+                'all_ids': True,
+                'modified_since': modified_since,
+            }
+        ).json()
+        self.log.info(f'Found {len(digital_object_ids)} digital objects modified and {len(deleted_digital_object_uris)} deleted in repository ID {repo_id}.')
+
+        digital_objects = self.digital_object_mods.fetch_by_ids(
+            repo['uri'], 'digital_objects', digital_object_ids)
+        resource_ids = self.digital_object_mods.get_linked_resource_ids(
+            repo['uri'], digital_objects)
+
+        digital_object_uris = [f'{repo["uri"]}/digital_objects/{digital_object_id}'
+            for digital_object_id in digital_object_ids]
+        for ead_id in self.get_eads_with_digital_objects(
+                digital_object_uris + list(deleted_digital_object_uris)):
+            if ead_id in resource_ids_by_ead:
+                resource_ids.add(resource_ids_by_ead[ead_id])
+            else:
+                self.log.warning(f'Resource of EAD ID {ead_id} not found in ArcFlow. Unable to update its digital objects.')
+
+        if resource_ids:
+            # resources deleted since are handled by process_deleted_records
+            existing_resource_ids = set(self.client.get(
+                f'{repo["uri"]}/resources',
+                params={'all_ids': True}
+            ).json())
+            resource_ids &= existing_resource_ids
+
+        self.log.info(f'Found {len(resource_ids)} resources with digital objects modified or deleted in repository ID {repo_id}.')
+        return resource_ids
+
+
+    def add_digital_object_collections(self, pool, outputs_repositories,
+            modified_since, resource_dir):
+        """
+        Add the collections whose digital objects changed in ArchivesSpace
+        since modified_since to the resources to export.
+
+        outputs_repositories: list of (repo, resource IDs) from task_repository
+
+        Returns:
+            list: (repo, resource IDs) with the collections added
+        """
+        deleted_digital_objects = {}
+        if self.skip_deleted_record_processing:
+            self.log.info('Skipping digital objects deleted in ArchivesSpace (--skip-deleted-record-processing flag set).')
+        else:
+            for record in self.get_deleted_records(modified_since):
+                match = DIGITAL_OBJECT_URI.match(record)
+                if match:
+                    deleted_digital_objects.setdefault(match.group(1), []).append(record)
+
+        resource_ids_by_ead = self.get_resource_ids_by_ead(resource_dir)
+        results = [pool.apply_async(
+            self.task_digital_object_collections,
+            args=(
+                repo,
+                modified_since,
+                deleted_digital_objects.get(self.get_repo_id(repo), []),
+                resource_ids_by_ead))
+            for repo, _ in outputs_repositories]
+
+        merged = []
+        for (repo, resources), result in zip(outputs_repositories, results):
+            added = sorted(result.get() - set(resources))
+            if added:
+                self.log.info(f'Exporting {len(added)} more resources in repository ID {self.get_repo_id(repo)} to update their digital objects.')
+            merged.append((repo, list(resources) + added))
+        return merged
+
+
+    def get_eads_with_digital_objects(self, digital_object_uris, batch_size=50):
+        """
+        Find the EAD IDs of the collections the digital objects are indexed
+        with in ArcLight Solr.
+        """
+        digital_object_uris = list(dict.fromkeys(digital_object_uris))
+        ead_ids = set()
+        for start in range(0, len(digital_object_uris), batch_size):
+            batch = ' OR '.join(
+                f'"{uri}"' for uri in digital_object_uris[start:start + batch_size])
+            docs = self._execute_solr_query(
+                [f'digital_object_uri_ssi:({batch})'], fields=['ead_ssi'])
+            for doc in docs:
+                ead_id = doc.get('ead_ssi')
+                ead_ids.update(ead_id if isinstance(ead_id, list) else [ead_id] if ead_id else [])
+        return ead_ids
+
+
+    def get_resource_ids_by_ead(self, resource_dir):
+        """
+        Map EAD IDs to resource IDs using the <resource ID>.xml symlinks
+        to the EADs in resource_dir.
+        """
+        resource_ids = {}
+        if os.path.isdir(resource_dir):
+            for entry in os.scandir(resource_dir):
+                match = re.match(r'^(\d+)\.xml$', entry.name)
+                if match and entry.is_symlink():
+                    ead_id = self.get_ead_from_symlink(entry.path)
+                    if ead_id:
+                        resource_ids[ead_id] = int(match.group(1))
+        return resource_ids
+
+
     def task_pdf(self, pdf_symlink):
         pdf_dir, repo_id, job_id, ead_id = pdf_symlink.split('_')
         #remove the last part of the path to get the pdf_dir
@@ -606,6 +733,9 @@ class ArcFlow:
 
             if not self.skip_resource_processing:
                 self.last_updated_collections = run_started
+                if modified_since > 0:
+                    outputs_repositories = self.add_digital_object_collections(
+                        pool, outputs_repositories, modified_since, resource_dir)
                 # Tasks for processing resources
                 results_resources = [pool.apply_async(
                     self.task_resource,

@@ -5,7 +5,8 @@ Tests for ArcFlow's handling of digital object MODS sidecars.
 import os
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from multiprocessing.pool import ThreadPool
+from unittest.mock import Mock, call, patch
 
 from main import ArcFlow
 
@@ -187,6 +188,176 @@ class TestDeletedRecords(unittest.TestCase):
         arcflow.delete_creator.assert_called_once_with(
             '/arclight/public/xml/agents/3.xml', 'creator_people_3')
         self.assertEqual(arcflow.client.get.call_args_list[0].kwargs['params']['modified_since'], 5)
+
+
+def json_response(data):
+    return Mock(**{'json.return_value': data})
+
+
+class TestDigitalObjectCollections(unittest.TestCase):
+
+    def setUp(self):
+        self.repo = {'uri': '/repositories/2'}
+        self.arcflow = make_arcflow(skip_deleted_record_processing=False)
+
+    def test_get_resource_ids_by_ead(self):
+        with tempfile.TemporaryDirectory() as resource_dir:
+            for name in ('UA.99.1.1.xml', 'MS.1.xml'):
+                open(f'{resource_dir}/{name}', 'w').close()
+            os.symlink('UA.99.1.1.xml', f'{resource_dir}/5.xml')
+            os.symlink('MS.1.xml', f'{resource_dir}/12.xml')
+            os.symlink('MS.1.xml', f'{resource_dir}/created_2_12.xml')
+            os.symlink('gone.xml', f'{resource_dir}/40.xml')
+            os.makedirs(f'{resource_dir}/digital_objects')
+
+            self.assertEqual(
+                self.arcflow.get_resource_ids_by_ead(resource_dir),
+                {'UA.99.1.1': 5, 'MS.1': 12})
+
+    def test_get_resource_ids_by_ead_without_dir(self):
+        self.assertEqual(self.arcflow.get_resource_ids_by_ead('/nonexistent/resources'), {})
+
+    def test_get_eads_with_digital_objects(self):
+        self.arcflow._execute_solr_query = Mock(side_effect=[
+            [{'ead_ssi': 'UA.99.1.1'}, {'ead_ssi': ['MS.1']}],
+            [{'ead_ssi': 'UA.99.1.1'}, {}],
+        ])
+        uris = [f'/repositories/2/digital_objects/{i}' for i in range(1, 4)]
+
+        self.assertEqual(
+            self.arcflow.get_eads_with_digital_objects(uris + uris[:1], batch_size=2),
+            {'UA.99.1.1', 'MS.1'})
+        self.assertEqual(self.arcflow._execute_solr_query.call_args_list, [
+            call(['digital_object_uri_ssi:("/repositories/2/digital_objects/1" OR "/repositories/2/digital_objects/2")'],
+                 fields=['ead_ssi']),
+            call(['digital_object_uri_ssi:("/repositories/2/digital_objects/3")'], fields=['ead_ssi']),
+        ])
+
+    def test_get_eads_with_no_digital_objects(self):
+        self.arcflow._execute_solr_query = Mock()
+
+        self.assertEqual(self.arcflow.get_eads_with_digital_objects([]), set())
+        self.arcflow._execute_solr_query.assert_not_called()
+
+    def test_task_digital_object_collections(self):
+        modified = [{'uri': '/repositories/2/digital_objects/8'}]
+        self.arcflow.client.get.side_effect = [
+            json_response([8, 9]),        # digital objects modified since
+            json_response([5, 6, 7, 12]),  # resources that still exist
+        ]
+        service = self.arcflow.digital_object_mods
+        service.fetch_by_ids.return_value = modified
+        service.get_linked_resource_ids.return_value = {6}
+        self.arcflow.get_eads_with_digital_objects = Mock(return_value={'UA.99.1.1', 'MS.1', 'Unknown.1'})
+
+        resource_ids = self.arcflow.task_digital_object_collections(
+            self.repo, 1700000000, ['/repositories/2/digital_objects/3'],
+            {'UA.99.1.1': 5, 'MS.1': 40})
+
+        # 40 was deleted from ArchivesSpace; Unknown.1 was never exported
+        self.assertEqual(resource_ids, {5, 6})
+        self.assertEqual(self.arcflow.client.get.call_args_list, [
+            call('/repositories/2/digital_objects', params={'all_ids': True, 'modified_since': 1700000000}),
+            call('/repositories/2/resources', params={'all_ids': True}),
+        ])
+        service.fetch_by_ids.assert_called_once_with('/repositories/2', 'digital_objects', [8, 9])
+        service.get_linked_resource_ids.assert_called_once_with('/repositories/2', modified)
+        # digital object 9 wasn't returned (e.g. suppressed) but is still looked up in Solr
+        self.arcflow.get_eads_with_digital_objects.assert_called_once_with([
+            '/repositories/2/digital_objects/8',
+            '/repositories/2/digital_objects/9',
+            '/repositories/2/digital_objects/3',
+        ])
+        self.arcflow.log.warning.assert_called_once()
+
+    def test_task_digital_object_collections_without_changes(self):
+        self.arcflow.client.get.return_value = json_response([])
+        self.arcflow.digital_object_mods.fetch_by_ids.return_value = []
+        self.arcflow.digital_object_mods.get_linked_resource_ids.return_value = set()
+        self.arcflow.get_eads_with_digital_objects = Mock(return_value=set())
+
+        self.assertEqual(
+            self.arcflow.task_digital_object_collections(self.repo, 1700000000, [], {}), set())
+        self.arcflow.client.get.assert_called_once()
+
+    def test_add_digital_object_collections(self):
+        repo_3 = {'uri': '/repositories/3'}
+        self.arcflow.get_deleted_records = Mock(return_value=iter([
+            '/repositories/2/digital_objects/1',
+            '/repositories/2/resources/4',
+            '/repositories/3/digital_objects/2',
+            '/agents/people/3',
+        ]))
+        self.arcflow.get_resource_ids_by_ead = Mock(return_value={'UA.99.1.1': 5})
+        self.arcflow.task_digital_object_collections = Mock(side_effect=[{5, 6}, set()])
+
+        with ThreadPool(2) as pool:
+            merged = self.arcflow.add_digital_object_collections(
+                pool, [(self.repo, [6, 1]), (repo_3, [])], 1700000000, '/arclight/public/xml/resources')
+
+        self.assertEqual(merged, [(self.repo, [6, 1, 5]), (repo_3, [])])
+        self.arcflow.get_deleted_records.assert_called_once_with(1700000000)
+        self.arcflow.get_resource_ids_by_ead.assert_called_once_with('/arclight/public/xml/resources')
+        self.assertCountEqual(self.arcflow.task_digital_object_collections.call_args_list, [
+            call(self.repo, 1700000000, ['/repositories/2/digital_objects/1'], {'UA.99.1.1': 5}),
+            call(repo_3, 1700000000, ['/repositories/3/digital_objects/2'], {'UA.99.1.1': 5}),
+        ])
+
+    def test_add_digital_object_collections_skips_delete_feed(self):
+        self.arcflow.skip_deleted_record_processing = True
+        self.arcflow.get_deleted_records = Mock()
+        self.arcflow.get_resource_ids_by_ead = Mock(return_value={})
+        self.arcflow.task_digital_object_collections = Mock(return_value={5})
+
+        with ThreadPool(1) as pool:
+            merged = self.arcflow.add_digital_object_collections(
+                pool, [(self.repo, [])], 1700000000, '/r')
+
+        self.assertEqual(merged, [(self.repo, [5])])
+        self.arcflow.get_deleted_records.assert_not_called()
+        self.arcflow.task_digital_object_collections.assert_called_once_with(self.repo, 1700000000, [], {})
+
+
+class TestProcessCollections(unittest.TestCase):
+
+    def process_collections(self, modified_since, **attrs):
+        repo = {'uri': '/repositories/2'}
+        settings = dict(
+            arclight_dir='/arclight', repository_id=None, skip_resource_processing=False,
+            skip_collection_indexing=True, skip_pdf_generation=True)
+        settings.update(attrs)
+        arcflow = make_arcflow(**settings)
+        arcflow.client.get.return_value = json_response([repo])
+        arcflow.task_repository = Mock(return_value=(repo, [1]))
+        arcflow.add_digital_object_collections = Mock(return_value=[(repo, [1, 5])])
+        arcflow.task_resource = Mock()
+        with patch('main.time.time', return_value=1800000000):
+            arcflow.process_collections(2, modified_since)
+        return arcflow
+
+    def exported_resource_ids(self, arcflow):
+        return sorted(c.args[1] for c in arcflow.task_resource.call_args_list)
+
+    def test_adds_collections_with_changed_digital_objects(self):
+        arcflow = self.process_collections(1700000000)
+
+        arcflow.add_digital_object_collections.assert_called_once()
+        self.assertEqual(arcflow.add_digital_object_collections.call_args.args[1:],
+            ([({'uri': '/repositories/2'}, [1])], 1700000000, '/arclight/public/xml/resources'))
+        self.assertEqual(self.exported_resource_ids(arcflow), [1, 5])
+        self.assertEqual(int(arcflow.last_updated_collections.timestamp()), 1800000000)
+
+    def test_full_export_doesnt_look_up_digital_objects(self):
+        arcflow = self.process_collections(0)
+
+        arcflow.add_digital_object_collections.assert_not_called()
+        self.assertEqual(self.exported_resource_ids(arcflow), [1])
+
+    def test_skip_resource_processing(self):
+        arcflow = self.process_collections(1700000000, skip_resource_processing=True)
+
+        arcflow.add_digital_object_collections.assert_not_called()
+        arcflow.task_resource.assert_not_called()
 
 
 if __name__ == '__main__':
