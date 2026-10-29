@@ -609,8 +609,11 @@ class ArcFlow:
         for start in range(0, len(digital_object_uris), batch_size):
             batch = ' OR '.join(
                 f'"{uri}"' for uri in digital_object_uris[start:start + batch_size])
+            # ArcLight's default request handler parses q with edismax,
+            # whose mm would require most of the URIs to match
             docs = self._execute_solr_query(
-                [f'digital_object_uri_ssi:({batch})'], fields=['ead_ssi'])
+                [f'digital_object_uri_ssi:({batch})'], fields=['ead_ssi'],
+                params={'defType': 'lucene'})
             for doc in docs:
                 ead_id = doc.get('ead_ssi')
                 ead_ids.update(ead_id if isinstance(ead_id, list) else [ead_id] if ead_id else [])
@@ -1016,13 +1019,14 @@ class ArcFlow:
 
         return criteria
 
-    def _execute_solr_query(self, query_parts, solr_url=None, fields=['id']):
+    def _execute_solr_query(self, query_parts, solr_url=None, fields=['id'], params=None):
         """
         A generic function to execute a query against the Solr index.
 
         Args:
             query_parts (list): A list of strings that will be joined with " AND ".
             fields (list): A list of Solr fields to return in the response.
+            params (dict): Additional Solr request parameters, e.g. defType.
 
         Returns:
             list: A list of dictionaries, where each dictionary contains the requested fields.
@@ -1040,7 +1044,7 @@ class ArcFlow:
 
         try:
             # First, get the total count of matching documents
-            count_params = {'q': query_string, 'rows': 0, 'wt': 'json'}
+            count_params = {'q': query_string, 'rows': 0, 'wt': 'json', **(params or {})}
             count_response = requests.get(f'{solr_url}/select', params=count_params)
             self.log.info(f"  [Solr Count Request]: {count_response.request.url}")
 
@@ -1055,7 +1059,8 @@ class ArcFlow:
                 'q': query_string,
                 'rows': num_found,  # Use the exact count to fetch all results
                 'fl': ','.join(fields), # Join field list into a comma-separated string
-                'wt': 'json'
+                'wt': 'json',
+                **(params or {}),
             }
             response = requests.get(f'{solr_url}/select', params=data_params)
             response.raise_for_status()

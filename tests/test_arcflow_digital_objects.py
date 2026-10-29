@@ -229,8 +229,29 @@ class TestDigitalObjectCollections(unittest.TestCase):
             {'UA.99.1.1', 'MS.1'})
         self.assertEqual(self.arcflow._execute_solr_query.call_args_list, [
             call(['digital_object_uri_ssi:("/repositories/2/digital_objects/1" OR "/repositories/2/digital_objects/2")'],
-                 fields=['ead_ssi']),
-            call(['digital_object_uri_ssi:("/repositories/2/digital_objects/3")'], fields=['ead_ssi']),
+                 fields=['ead_ssi'], params={'defType': 'lucene'}),
+            call(['digital_object_uri_ssi:("/repositories/2/digital_objects/3")'],
+                 fields=['ead_ssi'], params={'defType': 'lucene'}),
+        ])
+
+    @patch('main.requests.get')
+    def test_execute_solr_query_with_params(self, get):
+        self.arcflow.solr_url = 'http://solr/arclight'
+        count = Mock(json=Mock(return_value={'response': {'numFound': 1}}))
+        data = Mock(json=Mock(return_value={'response': {'docs': [{'ead_ssi': 'MS.1'}]}}))
+        get.side_effect = [count, data]
+
+        docs = self.arcflow._execute_solr_query(
+            ['digital_object_uri_ssi:("/repositories/2/digital_objects/1")'],
+            fields=['ead_ssi'], params={'defType': 'lucene'})
+
+        self.assertEqual(docs, [{'ead_ssi': 'MS.1'}])
+        query = 'digital_object_uri_ssi:("/repositories/2/digital_objects/1")'
+        self.assertEqual(get.call_args_list, [
+            call('http://solr/arclight/select',
+                 params={'q': query, 'rows': 0, 'wt': 'json', 'defType': 'lucene'}),
+            call('http://solr/arclight/select',
+                 params={'q': query, 'rows': 1, 'fl': 'ead_ssi', 'wt': 'json', 'defType': 'lucene'}),
         ])
 
     def test_get_eads_with_no_digital_objects(self):
