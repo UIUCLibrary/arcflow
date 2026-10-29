@@ -92,5 +92,43 @@ class TestSaveDigitalObjectMods(unittest.TestCase):
         self.assertIn('/repositories/2/resources/5', self.arcflow.log.critical.call_args[0][0])
 
 
+class TestDeleteEad(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.resource_dir = self.tmp.name
+        self.arcflow = make_arcflow()
+        self.arcflow.delete_arclight_solr_record = Mock(return_value=True)
+        for name in ('UA.99.1.1.xml', 'UA.99.1.1.pdf'):
+            open(f'{self.resource_dir}/{name}', 'w').close()
+        os.symlink('UA.99.1.1.xml', f'{self.resource_dir}/5.xml')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def delete_ead(self):
+        self.arcflow.delete_ead(
+            5, 'UA-99-1-1',
+            f'{self.resource_dir}/UA.99.1.1.xml',
+            f'{self.resource_dir}/UA.99.1.1.pdf')
+
+    def test_deletes_sidecar(self):
+        os.makedirs(f'{self.resource_dir}/digital_objects')
+        mods_file_path = f'{self.resource_dir}/digital_objects/UA.99.1.1.mods.xml'
+        open(mods_file_path, 'w').close()
+
+        self.delete_ead()
+
+        self.assertFalse(os.path.exists(mods_file_path))
+        self.assertEqual(os.listdir(self.resource_dir), ['digital_objects'])
+        self.arcflow.log.error.assert_not_called()
+
+    def test_without_sidecar(self):
+        self.delete_ead()
+
+        self.assertEqual(os.listdir(self.resource_dir), [])
+        self.arcflow.log.error.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

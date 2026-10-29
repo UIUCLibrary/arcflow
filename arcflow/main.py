@@ -1336,6 +1336,10 @@ class ArcFlow:
         if deleted_solr_record:
             self.delete_file(pdf_file_path)
             self.delete_file(xml_file_path)
+            # most collections have no digital object sidecar
+            mods_file_path = self.get_mods_file_path(xml_file_path)
+            if os.path.isfile(mods_file_path):
+                self.delete_file(mods_file_path)
             # delete symlink if exists
             symlink_path = f'{os.path.dirname(xml_file_path)}/{resource_id}.xml'
             self.delete_file(symlink_path)
