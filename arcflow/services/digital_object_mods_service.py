@@ -17,12 +17,14 @@ Handles:
 
 import html
 import logging
-import os
 import re
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-import yaml
 from lxml import etree
+
+from .digital_object_metadata import (
+    ENUMERATIONS_PATH, agent_name, bulk_date_expression, date_label,
+    load_enumerations, note_paragraphs, resolved_subjects)
 
 
 MODS_NS = 'http://www.loc.gov/mods/v3'
@@ -115,14 +117,10 @@ class DigitalObjectModsService:
         self.client = client
         self.log = log or logging.getLogger(__name__)
 
-        # Shared with OmekaService so dates are labelled the same way
-        enumerations_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'omeka', 'enumerations.yml')
         try:
-            with open(enumerations_path, 'r') as file:
-                self.enumerations = yaml.safe_load(file) or {}
+            self.enumerations = load_enumerations()
         except FileNotFoundError:
-            self.log.warning(f'File {enumerations_path} not found. Date labels will not be translated.')
+            self.log.warning(f'File {ENUMERATIONS_PATH} not found. Date labels will not be translated.')
             self.enumerations = {}
 
     # -- ArchivesSpace lookups ---------------------------------------------
@@ -340,7 +338,7 @@ class DigitalObjectModsService:
             self._sub(mods, 'typeOfResource',
                       self.RESOURCE_TYPES.get(resource_type, resource_type.replace('_', ' ')))
 
-        subjects = [s['_resolved'] for s in digital_object.get('subjects', []) if s.get('_resolved')]
+        subjects = resolved_subjects(digital_object)
         for subject in subjects:
             terms = subject.get('terms', [])
             if terms and all(t.get('term_type') == 'genre_form' for t in terms):
@@ -415,7 +413,7 @@ class DigitalObjectModsService:
         agent = linked_agent.get('_resolved')
         if not agent or agent.get('publish') is not True:
             return None
-        name_part = self._plain_text(agent.get('title') or agent.get('display_name', {}).get('sort_name'))
+        name_part = self._plain_text(agent_name(agent))
         if not name_part:
             return None
         attrs = {}
@@ -448,7 +446,7 @@ class DigitalObjectModsService:
             element = self.DATE_ELEMENTS.get(label, 'dateOther')
             label_attrs = {'type': label} if element == 'dateOther' else {}
 
-            display = self._display_date(date, label)
+            display = self._display_date(date)
             if display:
                 self._sub(origin_info, element, display, **label_attrs)
 
@@ -477,23 +475,18 @@ class DigitalObjectModsService:
         if len(origin_info):
             mods.append(origin_info)
 
-    def _display_date(self, date, label):
+    def _display_date(self, date):
         """
-        Free-text date from the date expression. Non-creation dates are
-        labelled, like OmekaService._parse_date. With no expression, Arcuit
-        builds the display date from the encoded years.
+        Free-text date from the date expression, labelled like
+        OmekaService._parse_date. With no expression, Arcuit builds the
+        display date from the encoded years, so begin and end aren't used.
         """
         expression = self._plain_text(date.get('expression'))
         if not expression:
             return ''
-        if date.get('date_type') == 'bulk':
-            bulk = self.enumerations.get('bulk', {})
-            prefix = bulk.get('_singular' if date.get('begin') == date.get('end') else '_plural')
-            if prefix:
-                expression = f'{prefix} {expression.replace("bulk", "").replace("()", "").strip()}'
-        if label != 'creation':
-            expression = f'{self.enumerations.get("date_label", {}).get(label, label)}: {expression}'
-        return expression
+        expression = bulk_date_expression(date, expression, self.enumerations)
+        label = date_label(date, self.enumerations)
+        return f'{label}: {expression}' if label else expression
 
     def _add_language(self, mods, lang_materials):
         for lang_material in lang_materials:
@@ -572,11 +565,7 @@ class DigitalObjectModsService:
 
     def _note_text(self, note):
         """Plain text of a note's content (and bibliography items)."""
-        content = note.get('content', [])
-        if isinstance(content, str):
-            content = [content]
-        paragraphs = [self._plain_text(c) for c in content]
-        paragraphs.extend(self._plain_text(i) for i in note.get('items', []))
+        paragraphs = [self._plain_text(p) for p in note_paragraphs(note)]
         return '\n\n'.join(p for p in paragraphs if p)
 
     @staticmethod
