@@ -26,6 +26,7 @@ python -m arcflow.main
 - **Creator Records**: Extracts creator agent information and indexes as standalone documents
 - **Biographical Notes**: Injects creator biographical/historical notes into collection EAD XML
 - **PDF Generation**: Generates finding aid PDFs via ArchivesSpace jobs
+- **Digital Object Metadata**: Exports published digital objects as MODS sidecars that Arcuit indexes as child documents
 - **Incremental Updates**: Supports modified-since filtering for efficient updates
 
 ## Creator Records
@@ -157,6 +158,31 @@ bundle exec traject \
 ```
 
 Or integrate into your ArcFlow deployment workflow.
+
+## Digital Object Metadata (MODS Sidecars)
+
+Whenever ArcFlow writes a collection's EAD, it also writes a MODS sidecar describing the collection's published digital objects:
+
+```
+<arclight>/public/xml/resources/<ead_id>.xml
+<arclight>/public/xml/resources/digital_objects/<ead_id>.mods.xml
+```
+
+The sidecar is a `<modsCollection>` with one `<mods version="3.8">` per published digital object linked to the resource or to one of its published archival objects. Its format is the contract described in the header of Arcuit's `example_docs/xml/digital_objects/UA.99.1.1.mods.xml`. Each record carries the digital object URI in `recordInfo/recordIdentifier[@source="ArchivesSpace"]` and one `relatedItem[@type="host"]` per linked archival object or resource, which Arcuit uses to attach the digital object to the right component.
+
+**What is exported:**
+- Digital objects are included only when published and not suppressed. Unpublished notes, file versions and agents are left out.
+- Hosts come from the archival objects' current `instances` in ArchivesSpace, not from the EAD's `<dao>` elements, so a deleted or unpublished digital object never lingers in the sidecar.
+- When a collection has no published digital objects, no sidecar is written and any old one is removed.
+- If the sidecar can't be built, ArcFlow logs a critical error, removes the stale sidecar and indexes the collection without digital object metadata.
+
+**Keeping sidecars current:** Editing a digital object doesn't reliably update the timestamp of the resource it belongs to, so incremental collection runs also:
+1. Poll `GET /repositories/:repo_id/digital_objects?all_ids=true&modified_since=<last run>` and re-export every collection linked to the changed digital objects.
+2. Look up those digital objects, plus the ones in the delete feed, in ArcLight Solr (`digital_object_uri_ssi`) and re-export the collections they were indexed with. This covers digital objects that were deleted, unpublished, suppressed or moved to another collection.
+
+`--skip-deleted-record-processing` also skips the delete feed lookup in step 2. `--digital-objects-only` runs don't refresh sidecars; the next collections run catches up.
+
+**Indexing:** ArcFlow passes `-s arcuit.digital_objects_dir=<arclight>/public/xml/resources/digital_objects` to traject. Arcuit versions without digital object support ignore this setting.
 
 ## Installation
 
