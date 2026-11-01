@@ -525,14 +525,9 @@ class ArcFlow:
             set: Resource IDs
         """
         repo_id = self.get_repo_id(repo)
-        digital_object_ids = self.client.get(
-            f'{repo["uri"]}/digital_objects',
-            params={
-                'all_ids': True,
-                'modified_since': modified_since,
-            }
-        ).json()
-        self.log.info(f'Found {len(digital_object_ids)} digital objects modified and {len(deleted_digital_object_uris)} deleted in repository ID {repo_id}.')
+        _, digital_object_ids = self.task_repository(
+            repo, modified_since, 'digital_objects')
+        self.log.info(f'Found {len(deleted_digital_object_uris)} digital objects deleted in repository ID {repo_id}.')
 
         digital_objects = self.digital_object_mods.fetch_by_ids(
             repo['uri'], 'digital_objects', digital_object_ids)
@@ -560,7 +555,7 @@ class ArcFlow:
         return resource_ids
 
 
-    def add_digital_object_collections(self, pool, outputs_repositories,
+    def add_digital_object_collections(self, outputs_repositories,
             modified_since, resource_dir):
         """
         Add the collections whose digital objects changed in ArchivesSpace
@@ -581,18 +576,14 @@ class ArcFlow:
                     deleted_digital_objects.setdefault(match.group(1), []).append(record)
 
         resource_ids_by_ead = self.get_resource_ids_by_ead(resource_dir)
-        results = [pool.apply_async(
-            self.task_digital_object_collections,
-            args=(
+        merged = []
+        for repo, resources in outputs_repositories:
+            resource_ids = self.task_digital_object_collections(
                 repo,
                 modified_since,
                 deleted_digital_objects.get(self.get_repo_id(repo), []),
-                resource_ids_by_ead))
-            for repo, _ in outputs_repositories]
-
-        merged = []
-        for (repo, resources), result in zip(outputs_repositories, results):
-            added = sorted(result.get() - set(resources))
+                resource_ids_by_ead)
+            added = sorted(resource_ids - set(resources))
             if added:
                 self.log.info(f'Exporting {len(added)} more resources in repository ID {self.get_repo_id(repo)} to update their digital objects.')
             merged.append((repo, list(resources) + added))
@@ -738,7 +729,7 @@ class ArcFlow:
                 self.last_updated_collections = run_started
                 if modified_since > 0:
                     outputs_repositories = self.add_digital_object_collections(
-                        pool, outputs_repositories, modified_since, resource_dir)
+                        outputs_repositories, modified_since, resource_dir)
                 # Tasks for processing resources
                 results_resources = [pool.apply_async(
                     self.task_resource,
