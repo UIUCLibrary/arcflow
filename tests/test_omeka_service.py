@@ -145,11 +145,11 @@ class TestPrepareItemData(unittest.TestCase):
                 {'property_id': 'auto', '@value': '1960', 'type': 'literal'},
             ],
             'dcterms:creator': [
-                {'property_id': 'auto', '@value': 'Office of the Registrar', 'type': 'literal'},
-                {'property_id': 'auto', '@value': 'Hidden, Agent', 'type': 'literal'},
+                {'property_id': 'auto', '@value': 'Office of the Registrar', 'type': 'literal', 'is_public': True},
+                {'property_id': 'auto', '@value': 'Hidden, Agent', 'type': 'literal', 'is_public': False},
             ],
             'dcterms:subject': [
-                {'property_id': 'auto', '@value': 'Example Hall', 'type': 'literal'},
+                {'property_id': 'auto', '@value': 'Example Hall', 'type': 'literal', 'is_public': True},
                 {'property_id': 'auto', '@value': 'Universities and colleges', 'type': 'literal'},
             ],
             'dcterms:spatial': [

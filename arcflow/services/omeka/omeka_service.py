@@ -229,6 +229,7 @@ class OmekaService:
                         'property_id': 'auto',
                         '@value': agent_name(agent['_resolved']),
                         'type': 'literal',
+                        'is_public': self._is_public(agent['_resolved']),
                     })
 
         for subject in resolved_subjects(digital_object):
