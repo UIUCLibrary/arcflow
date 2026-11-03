@@ -55,7 +55,7 @@ def get_resource_id_from_ead(ead_id, asnake_client):
         search = asnake_client.get('/search',
             params={
                 'page': 1,
-                'q': f'"{ead_id}"',
+                'q': f'ead_id:"{ead_id}"',
                 'type': ['resource'],
                 'fields': ['id'],
             }
