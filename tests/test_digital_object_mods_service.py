@@ -146,6 +146,21 @@ class TestDigitalObjectModsService(unittest.TestCase):
         self.assertEqual(self.texts(origin_info, 'm:dateCreated[@point="end"]'), ['1931'])
         self.assertEqual(self.texts(origin_info, 'm:dateOther[@type="other"]'), ['Other: May 1942', '1942-05-01'])
 
+    def test_bulk_dates_are_prefixed(self):
+        do = rich_digital_object()
+        do['dates'] = [
+            {'label': 'creation', 'date_type': 'bulk', 'begin': '1930', 'end': '1930', 'expression': 'bulk 1930'},
+            {'label': 'creation', 'date_type': 'bulk', 'begin': '1926', 'end': '1934', 'expression': '(bulk 1926-1934)'},
+            {'label': 'digitized', 'date_type': 'bulk', 'begin': '2010', 'end': '2012', 'expression': '2010-2012'},
+        ]
+        origin_info = self.build(do).xpath('m:originInfo', namespaces=NS)[0]
+        self.assertEqual(self.texts(origin_info, 'm:dateCreated[not(@encoding)]'), [
+            'Majority of material found in 1930',
+            'Majority of material found within ( 1926-1934)',
+        ])
+        self.assertEqual(self.texts(origin_info, 'm:dateCaptured[not(@encoding)]'),
+                         ['Digitized: Majority of material found within 2010-2012'])
+
     def test_physical_description(self):
         physical_description = self.build().xpath('m:physicalDescription', namespaces=NS)[0]
         self.assertEqual(self.texts(physical_description, 'm:extent'), ['48 glass plate negatives (4 x 5 in.)'])

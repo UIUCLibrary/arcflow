@@ -5,7 +5,6 @@ Tests for ArcFlow's handling of digital object MODS sidecars.
 import os
 import tempfile
 import unittest
-from multiprocessing.pool import ThreadPool
 from unittest.mock import Mock, call, patch
 
 from main import ArcFlow
@@ -263,7 +262,10 @@ class TestDigitalObjectCollections(unittest.TestCase):
     def test_task_digital_object_collections(self):
         modified = [{'uri': '/repositories/2/digital_objects/8'}]
         self.arcflow.client.get.side_effect = [
-            json_response([8, 9]),        # digital objects modified since
+            json_response([8]),            # digital objects modified since
+            json_response({'results': [   # digital object components modified since
+                {'digital_object': {'ref': '/repositories/2/digital_objects/9'}},
+            ], 'last_page': 1}),
             json_response([5, 6, 7, 12]),  # resources that still exist
         ]
         service = self.arcflow.digital_object_mods
@@ -279,6 +281,7 @@ class TestDigitalObjectCollections(unittest.TestCase):
         self.assertEqual(resource_ids, {5, 6})
         self.assertEqual(self.arcflow.client.get.call_args_list, [
             call('/repositories/2/digital_objects', params={'all_ids': True, 'modified_since': 1700000000}),
+            call('/repositories/2/digital_object_components', params={'page': 1, 'modified_since': 1700000000}),
             call('/repositories/2/resources', params={'all_ids': True}),
         ])
         service.fetch_by_ids.assert_called_once_with('/repositories/2', 'digital_objects', [8, 9])
@@ -292,14 +295,17 @@ class TestDigitalObjectCollections(unittest.TestCase):
         self.arcflow.log.warning.assert_called_once()
 
     def test_task_digital_object_collections_without_changes(self):
-        self.arcflow.client.get.return_value = json_response([])
+        self.arcflow.client.get.side_effect = [
+            json_response([]),
+            json_response({'results': [], 'last_page': 1}),
+        ]
         self.arcflow.digital_object_mods.fetch_by_ids.return_value = []
         self.arcflow.digital_object_mods.get_linked_resource_ids.return_value = set()
         self.arcflow.get_eads_with_digital_objects = Mock(return_value=set())
 
         self.assertEqual(
             self.arcflow.task_digital_object_collections(self.repo, 1700000000, [], {}), set())
-        self.arcflow.client.get.assert_called_once()
+        self.assertEqual(self.arcflow.client.get.call_count, 2)
 
     def test_add_digital_object_collections(self):
         repo_3 = {'uri': '/repositories/3'}
@@ -312,14 +318,13 @@ class TestDigitalObjectCollections(unittest.TestCase):
         self.arcflow.get_resource_ids_by_ead = Mock(return_value={'UA.99.1.1': 5})
         self.arcflow.task_digital_object_collections = Mock(side_effect=[{5, 6}, set()])
 
-        with ThreadPool(2) as pool:
-            merged = self.arcflow.add_digital_object_collections(
-                pool, [(self.repo, [6, 1]), (repo_3, [])], 1700000000, '/arclight/public/xml/resources')
+        merged = self.arcflow.add_digital_object_collections(
+            [(self.repo, [6, 1]), (repo_3, [])], 1700000000, '/arclight/public/xml/resources')
 
         self.assertEqual(merged, [(self.repo, [6, 1, 5]), (repo_3, [])])
         self.arcflow.get_deleted_records.assert_called_once_with(1700000000)
         self.arcflow.get_resource_ids_by_ead.assert_called_once_with('/arclight/public/xml/resources')
-        self.assertCountEqual(self.arcflow.task_digital_object_collections.call_args_list, [
+        self.assertEqual(self.arcflow.task_digital_object_collections.call_args_list, [
             call(self.repo, 1700000000, ['/repositories/2/digital_objects/1'], {'UA.99.1.1': 5}),
             call(repo_3, 1700000000, ['/repositories/3/digital_objects/2'], {'UA.99.1.1': 5}),
         ])
@@ -330,9 +335,8 @@ class TestDigitalObjectCollections(unittest.TestCase):
         self.arcflow.get_resource_ids_by_ead = Mock(return_value={})
         self.arcflow.task_digital_object_collections = Mock(return_value={5})
 
-        with ThreadPool(1) as pool:
-            merged = self.arcflow.add_digital_object_collections(
-                pool, [(self.repo, [])], 1700000000, '/r')
+        merged = self.arcflow.add_digital_object_collections(
+            [(self.repo, [])], 1700000000, '/r')
 
         self.assertEqual(merged, [(self.repo, [5])])
         self.arcflow.get_deleted_records.assert_not_called()
@@ -362,9 +366,8 @@ class TestProcessCollections(unittest.TestCase):
     def test_adds_collections_with_changed_digital_objects(self):
         arcflow = self.process_collections(1700000000)
 
-        arcflow.add_digital_object_collections.assert_called_once()
-        self.assertEqual(arcflow.add_digital_object_collections.call_args.args[1:],
-            ([({'uri': '/repositories/2'}, [1])], 1700000000, '/arclight/public/xml/resources'))
+        arcflow.add_digital_object_collections.assert_called_once_with(
+            [({'uri': '/repositories/2'}, [1])], 1700000000, '/arclight/public/xml/resources')
         self.assertEqual(self.exported_resource_ids(arcflow), [1, 5])
         self.assertEqual(int(arcflow.last_updated_collections.timestamp()), 1800000000)
 

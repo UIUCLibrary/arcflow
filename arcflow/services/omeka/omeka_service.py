@@ -1,11 +1,13 @@
 import json
 import os
-import yaml
 import mssql_python
 import uuid
 import requests
 from io import BytesIO, BufferedReader
 from utils.stage_classifications import labels_from_path
+from ..digital_object_metadata import (
+    agent_name, bulk_date_expression, date_label, load_enumerations,
+    note_paragraphs, resolved_subjects)
 
 
 class OmekaService:
@@ -55,8 +57,7 @@ class OmekaService:
             self.archon = tmp
 
         try:
-            with open(os.path.join(os.path.abspath((__file__) + "/../"), 'enumerations.yml'), 'r') as file:
-                self.enumerations  = yaml.safe_load(file)
+            self.enumerations = load_enumerations()
         except FileNotFoundError:
             self.log.error('File enumerations.yml not found.')
             exit(0)
@@ -67,13 +68,8 @@ class OmekaService:
         begin_date = date_obj.get('begin', '')
         end_date = date_obj.get('end', '')
 
-        if label_value:
-            if label_value == 'creation':
-                label = ''
-            else:
-                label = f'{self.enumerations["date_label"].get(label_value, label_value)}: '
-        else:
-            label = ''
+        label = date_label(date_obj, self.enumerations)
+        label = f'{label}: ' if label else ''
 
         exp = date_obj.get('expression', '')
         if not exp:
@@ -81,12 +77,7 @@ class OmekaService:
             if end_date:
                 exp = (exp + ' - ' if exp else '') + end_date
 
-        if date_obj.get('date_type') == 'bulk':
-            exp = exp.replace('bulk', '').replace('()', '').strip()
-            if begin_date == end_date:
-                exp = f'{self.enumerations["bulk"]["_singular"]} {exp}'
-            else:
-                exp = f'{self.enumerations["bulk"]["_plural"]} {exp}'
+        exp = bulk_date_expression(date_obj, exp, self.enumerations)
 
         return label, exp, label_value
 
@@ -236,22 +227,21 @@ class OmekaService:
                         self.AGENT_TYPES[agent['role']], [])
                     item_data[self.AGENT_TYPES[agent['role']]].append({
                         'property_id': 'auto',
-                        '@value': agent['_resolved']['title'],
+                        '@value': agent_name(agent['_resolved']),
                         'type': 'literal',
+                        'is_public': self._is_public(agent['_resolved']),
                     })
 
-        if 'subjects' in digital_object:
-            for subject in digital_object['subjects']:
-                if '_resolved' in subject:
-                    for term in subject['_resolved']['terms']:
-                        if term['term_type'] in self.TERM_TYPES:
-                            item_data[self.TERM_TYPES[term['term_type']]] = item_data.get(
-                                self.TERM_TYPES[term['term_type']], [])
-                            item_data[self.TERM_TYPES[term['term_type']]].append({
-                                'property_id': 'auto',
-                                '@value': term['term'],
-                                'type': 'literal',
-                            })
+        for subject in resolved_subjects(digital_object):
+            for term in subject['terms']:
+                if term['term_type'] in self.TERM_TYPES:
+                    item_data[self.TERM_TYPES[term['term_type']]] = item_data.get(
+                        self.TERM_TYPES[term['term_type']], [])
+                    item_data[self.TERM_TYPES[term['term_type']]].append({
+                        'property_id': 'auto',
+                        '@value': term['term'],
+                        'type': 'literal',
+                    })
 
         if 'notes' in digital_object:
             for note in digital_object['notes']:
@@ -262,7 +252,7 @@ class OmekaService:
                             self.NOTE_TYPES['note'][note_label], [])
                         item_data[self.NOTE_TYPES['note'][note_label]].append({
                             'property_id': 'auto',
-                            '@value': "\n\n".join(note['content']),
+                            '@value': "\n\n".join(note_paragraphs(note)),
                             'type': 'literal',
                             'is_public': self._is_public(note),
                         })
@@ -271,7 +261,7 @@ class OmekaService:
                         self.NOTE_TYPES[note['type']], [])
                     item_data[self.NOTE_TYPES[note['type']]].append({
                         'property_id': 'auto',
-                        '@value': "\n\n".join(note['content']).replace('<a href', '<ref href').replace('</a>', '</ref>'),
+                        '@value': "\n\n".join(note_paragraphs(note)).replace('<a href', '<ref href').replace('</a>', '</ref>'),
                         'type': 'ead:xml',
                         'is_public': self._is_public(note),
                     })
