@@ -21,10 +21,12 @@ class TestAgentService(unittest.TestCase):
         # Mock agent response
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             'title': 'Test Agent',
             'notes': [
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     'persistent_id': 'abc123',
                     'subnotes': [
                         {'content': 'First paragraph.\nSecond paragraph.'}
@@ -47,6 +49,7 @@ class TestAgentService(unittest.TestCase):
         """Test fetching agent with no bioghist notes."""
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             'title': 'Test Agent',
             'notes': []
         }
@@ -60,10 +63,12 @@ class TestAgentService(unittest.TestCase):
         """Test handling subnote content as a list."""
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             'title': 'Test Agent',
             'notes': [
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     'persistent_id': 'xyz789',
                     'subnotes': [
                         {'content': ['First item', 'Second item']}
@@ -84,10 +89,12 @@ class TestAgentService(unittest.TestCase):
         """Test that empty lines are filtered out."""
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             'title': 'Test Agent',
             'notes': [
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     'persistent_id': 'def456',
                     'subnotes': [
                         {'content': 'Line 1\n\n\nLine 2\n  \nLine 3'}
@@ -109,10 +116,12 @@ class TestAgentService(unittest.TestCase):
         """Test handling bioghist note without persistent_id."""
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             'title': 'Test Agent',
             'notes': [
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     # No persistent_id
                     'subnotes': [
                         {'content': 'Some content'}
@@ -136,10 +145,12 @@ class TestAgentService(unittest.TestCase):
         """Test handling unexpected content type."""
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             'title': 'Test Agent',
             'notes': [
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     'persistent_id': 'ghi123',
                     'subnotes': [
                         {'content': {'unexpected': 'dict'}}  # Invalid type
@@ -164,11 +175,13 @@ class TestAgentService(unittest.TestCase):
         """Test using display_name.sort_name when title is missing."""
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             # No 'title' field
             'display_name': {'sort_name': 'Fallback Name'},
             'notes': [
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     'persistent_id': 'jkl456',
                     'subnotes': [
                         {'content': 'Some content'}
@@ -198,10 +211,12 @@ class TestAgentService(unittest.TestCase):
         """Test handling multiple subnotes in a bioghist note."""
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             'title': 'Test Agent',
             'notes': [
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     'persistent_id': 'mno789',
                     'subnotes': [
                         {'content': 'First subnote'},
@@ -225,10 +240,12 @@ class TestAgentService(unittest.TestCase):
         """Test that only the first bioghist note is returned."""
         mock_response = Mock()
         mock_response.json.return_value = {
+            'publish': True,
             'title': 'Test Agent',
             'notes': [
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     'persistent_id': 'first123',
                     'subnotes': [
                         {'content': 'First bioghist'}
@@ -236,6 +253,7 @@ class TestAgentService(unittest.TestCase):
                 },
                 {
                     'jsonmodel_type': 'note_bioghist',
+                    'publish': True,
                     'persistent_id': 'second456',
                     'subnotes': [
                         {'content': 'Second bioghist'}
@@ -251,6 +269,44 @@ class TestAgentService(unittest.TestCase):
         self.assertEqual(result['persistent_id'], 'first123')
         self.assertIn('First bioghist', result['paragraphs'])
         self.assertNotIn('Second bioghist', result['paragraphs'])
+
+    def _agent(self, publish=True, notes=None):
+        mock_response = Mock()
+        mock_response.json.return_value = {'title': 'Gregory, John Milton', 'publish': publish, 'notes': notes or []}
+        self.mock_client.get.return_value = mock_response
+
+    def test_unpublished_agent_contributes_no_bioghist(self):
+        """An unpublished creator is left out of the EAD, so its note must be too."""
+        self._agent(publish=False, notes=[{'jsonmodel_type': 'note_bioghist', 'publish': True, 'persistent_id': 'a',
+                                           'subnotes': [{'content': 'Private history.'}]}])
+
+        self.assertIsNone(self.service.get_agent_bioghist_data('/agents/people/3015'))
+
+    def test_unpublished_legacy_archon_id_note_is_skipped(self):
+        """Agents migrated from Archon carry an unpublished 'Legacy Archon ID' bioghist (UIUCLibrary/arclight#88)."""
+        self._agent(notes=[
+            {'jsonmodel_type': 'note_bioghist', 'publish': False, 'persistent_id': 'archon', 'label': 'Legacy Archon ID',
+             'subnotes': [{'content': 'UA Archon Instance::Creator Record ID 546', 'publish': False}]},
+            {'jsonmodel_type': 'note_bioghist', 'publish': True, 'persistent_id': 'bio',
+             'subnotes': [{'content': 'Regent of the University.'}]},
+        ])
+
+        result = self.service.get_agent_bioghist_data('/agents/people/3015')
+
+        self.assertEqual(result['persistent_id'], 'bio')
+        self.assertEqual(result['paragraphs'], ['Regent of the University.'])
+
+    def test_agent_whose_only_bioghist_is_unpublished_has_none(self):
+        self._agent(notes=[{'jsonmodel_type': 'note_bioghist', 'publish': False, 'persistent_id': 'archon',
+                            'subnotes': [{'content': 'UA Archon Instance::Creator Record ID 546'}]}])
+
+        self.assertIsNone(self.service.get_agent_bioghist_data('/agents/people/3015'))
+
+    def test_unpublished_subnote_is_skipped(self):
+        self._agent(notes=[{'jsonmodel_type': 'note_bioghist', 'publish': True, 'persistent_id': 'bio',
+                            'subnotes': [{'content': 'Public.'}, {'content': 'Staff only.', 'publish': False}]}])
+
+        self.assertEqual(self.service.get_agent_bioghist_data('/agents/people/1')['paragraphs'], ['Public.'])
 
 
 if __name__ == '__main__':

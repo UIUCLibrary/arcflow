@@ -31,7 +31,13 @@ python -m arcflow.main
 
 ## Creator Records
 
-ArcFlow now generates standalone creator documents in addition to collection records. Creator documents:
+ArcFlow now generates standalone creator documents in addition to collection records.
+
+**Requires the [aspace-eac-cpf-2](https://github.com/UIUCLibrary/aspace-eac-cpf-2) ArchivesSpace plugin.** Creator records are fetched as EAC-CPF 2.0 from `/agents/{people,corporate_entities,families}/{id}/eac_cpf_2.xml`, which contains published data only. ArchivesSpace's own `/archival_contexts` EAC-CPF 2010 export is not used: it reverses hierarchical and temporal relationships between agents and exports unpublished notes and records (UIUCLibrary/arclight#88). If the plugin is not installed, ArcFlow logs a critical error and skips creators rather than treating every agent as missing.
+
+An agent the plugin answers with 404 (unpublished or deleted) has its creator record removed from Solr and from `agents/`.
+
+Creator documents:
 
 - Include biographical/historical notes from ArchivesSpace agent records
 - Link to all collections where the creator is listed
@@ -60,40 +66,49 @@ This filtering ensures that only legitimate archival creators are discoverable i
 
 1. **Extraction**: `get_all_agents()` fetches all agents from ArchivesSpace
 2. **Filtering**: `is_target_agent()` filters out system users, donors, and non-creator agents  
-3. **Processing**: `task_agent()` generates an EAC-CPF XML document for each target agent with bioghist notes
+3. **Processing**: `task_agent()` fetches the EAC-CPF 2.0 record for each target agent from the aspace-eac-cpf-2 plugin
 4. **Linking**: Handled via Solr using the persistent_id field (agents and collections linked through bioghist references)
 5. **Indexing**: Creator XML files are indexed to Solr using `traject_config_eac_cpf.rb`
 
 ### Creator Document Format
 
-Creator documents are stored as XML files in `agents/` directory using the ArchivesSpace EAC-CPF export:
+Creator documents are stored as `agents/creator_{entity_type}_{id}.xml`, exactly as the plugin returns them. Relationships read from the described creator to the related one, and linked collections carry their EAD ID in `aspace:eadId`, so no post-processing is needed:
 
 ```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<eac-cpf xml:lang="eng" xmlns="urn:isbn:1-931666-33-4" xmlns:html="http://www.w3.org/1999/xhtml" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:isbn:1-931666-33-4 https://eac.staatsbibliothek-berlin.de/schema/cpf.xsd">
-  <control/>
+<eac xmlns="https://archivists.org/ns/eac/v2" xmlns:aspace="https://github.com/UIUCLibrary/aspace-eac-cpf-2#">
+  <control maintenanceStatus="revised">...</control>
   <cpfDescription>
     <identity>
-      <entityType>corporateBody</entityType>
-      <nameEntry>
-        <part localType="primary_name">Core: Leadership, Infrastructure, Futures</part>
-        <authorizedForm>local</authorizedForm>
+      <entityType value="corporateBody"/>
+      <nameEntry status="authorized" preferredForm="true" aspace:sortName="Administrative Services Office">
+        <part localType="primary_name">Administrative Services Office</part>
       </nameEntry>
     </identity>
     <description>
-      <existDates>
-        <date localType="existence" standardDate="2020">2020-</date>
-      </existDates>
-      <biogHist>
-        <p>Founded on September 1, 2020, the Core: Leadership, Infrastructure, Futures division of the American Library Association has a mission to cultivate and amplify the collective expertise of library workers in core functions through community building, advocacy, and learning.
-          In June 2020, the ALA Council voted to approve Core: Leadership, Infrastructure, Futures as a new ALA division beginning September 1, 2020, and to dissolve the Association for Library Collections and Technical Services (ALCTS), the Library Information Technology Association (LITA) and the Library Leadership and Management Association (LLAMA) effective August 31, 2020. The vote to form Core was 163 to 1.(1)</p>
-        <citation>1. "ALA Council approves Core; dissolves ALCTS, LITA and LLAMA," July 1, 2020, http://www.ala.org/news/member-news/2020/07/ala-council-approves-core-dissolves-alcts-lita-and-llama.</citation>
-      </biogHist>
+      <biogHist><head>Historical Note</head><p>System Human Resource Services is dedicated to ...</p></biogHist>
     </description>
-    <relations/>
+    <relations>
+      <relation>
+        <targetEntity targetType="corporateBody" valueURI="https://archivesspace.example.edu/agents/corporate_entities/1539">
+          <part>University of Illinois at Urbana-Champaign. Office of the Chancellor</part>
+        </targetEntity>
+        <relationType localType="is_subordinate_to" vocabularySource="RiC-O"
+                      valueURI="https://www.ica.org/standards/RiC/ontology#isOrWasSubordinateTo">is or was subordinate to</relationType>
+      </relation>
+      <relation>
+        <targetEntity targetType="resource" aspace:recordType="resource" aspace:eadId="UA.24.12.812"
+                      valueURI="https://archivesspace.example.edu/repositories/7/resources/5246">
+          <part>Mailing Services Publications</part>
+        </targetEntity>
+        <relationType localType="creator" vocabularySource="RiC-O"
+                      valueURI="https://www.ica.org/standards/RiC/ontology#isCreatorOf">is creator of</relationType>
+      </relation>
+    </relations>
   </cpfDescription>
-</eac-cpf>
+</eac>
 ```
+
+The biographical notes ArcFlow copies into collection EADs follow the same publication rules: an unpublished agent, note or subnote is left out.
 
 ### Indexing Creator Documents
 
