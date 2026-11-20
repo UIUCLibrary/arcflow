@@ -39,15 +39,22 @@ class AgentService:
 
         Returns:
             dict with keys: 'agent_name', 'persistent_id', 'paragraphs'
-            or None if no bioghist found or on error
+            or None if the agent is unpublished, has no published bioghist, or on error
         """
 
         try:
             agent = self.client.get(agent_uri).json()
             agent_name = agent.get('title') or agent.get('display_name', {}).get('sort_name', 'Unknown')
 
+            # Only published data reaches the public site. ArchivesSpace's EAD
+            # export already leaves unpublished creators out of <origination>;
+            # their notes must not come back in through here. Agents migrated
+            # from Archon all carry an unpublished "Legacy Archon ID" bioghist.
+            if agent.get('publish') is not True:
+                return None
+
             for note in agent.get('notes', []):
-                if note.get('jsonmodel_type') == 'note_bioghist':
+                if note.get('jsonmodel_type') == 'note_bioghist' and note.get('publish') is True:
                     persistent_id = note.get('persistent_id')
                     paragraphs = self._extract_paragraphs(note, agent_uri)
 
@@ -79,6 +86,9 @@ class AgentService:
 
         if 'subnotes' in note:
             for subnote in note['subnotes']:
+                # Subnotes inherit publication from their note unless explicitly unpublished
+                if subnote.get('publish') is False:
+                    continue
                 if 'content' in subnote:
                     content = subnote['content']
 
