@@ -862,7 +862,7 @@ class ArcFlow:
                 agent_type = agent_match.group('agent_type')
                 agent_id = agent_match.group('record_id')
                 self.log.info(f'Processing deleted agent ID {agent_id}...')
-                file_path = f'{agent_dir}/{agent_id}.xml'
+                file_path = f'{agent_dir}/creator_{agent_type}_{agent_id}.xml'
                 agent_solr_id = f'creator_{agent_type}_{agent_id}'
                 self.delete_creator(file_path, agent_solr_id)
 
