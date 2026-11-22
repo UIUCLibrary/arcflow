@@ -1212,9 +1212,6 @@ class ArcFlow:
 
         self.log.info(f'Processing creator agents...')
 
-        if not self.eac_cpf_plugin_installed():
-            return []
-
         self.last_updated_creators = datetime.fromtimestamp(int(time.time()), timezone.utc)
         # Get agents to process
         agents = self.get_all_agents(modified_since=modified_since)
@@ -1259,52 +1256,84 @@ class ArcFlow:
         return creator_ids
 
 
+    EAC_CPF_2_NAMESPACE = 'https://archivists.org/ns/eac/v2'
+
+    def _reads_eac_cpf_2(self, traject_config):
+        """
+        Whether a traject config reads EAC-CPF 2.0. Arcuit keeps the namespace
+        in a helper next to the config, so the config's directory is searched.
+        A config for EAC-CPF 2010 does not fail on 2.0 records: it indexes
+        them with empty titles, so it has to be caught before it runs.
+        """
+        config_dir = os.path.dirname(traject_config)
+        candidates = [traject_config] + sorted(
+            os.path.join(config_dir, f) for f in os.listdir(config_dir) if f.endswith('.rb'))
+        for path in candidates:
+            try:
+                with open(path, encoding='utf-8') as f:
+                    if self.EAC_CPF_2_NAMESPACE in f.read():
+                        return True
+            except OSError:
+                continue
+        return False
+
     def find_eac_cpf_config(self):
         """
         Find the traject config for creator indexing.
 
         Search order:
-        1. {arclight_dir}/lib/arcuit/traject/eac_cpf_config.rb
-        2. example_eac_cpf_config.rb in arcflow root
+        1. lib/arcuit/traject/eac_cpf_config.rb in the arcuit gem the Arclight app bundles
+        2. example_traject_config_eac_cpf.rb in arcflow root
         3. Fail
+
+        A config is only used if it reads EAC-CPF 2.0, the format the
+        aspace-eac-cpf-2 plugin exports.
 
         Returns:
            str: Path to traject config, or None if not found
         """
         self.log.info('Searching for eac_cpf_config.rb...')
+        checked = []
 
-        # Try 1: Check arclight directory
-        result_show = subprocess.run(
-            ['bundle', 'show', 'arcuit'],
-            capture_output=True,
-            text=True,
-            cwd=self.arclight_dir
-        )
-        arcuit_dir = result_show.stdout.strip()
-        traject_config = os.path.join(arcuit_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb')
-        if os.path.exists(traject_config):
-           self.log.info(f'✓ Using traject config from arclight: {traject_config}')
-           return traject_config
+        # Try 1: the arcuit gem the Arclight app uses
+        try:
+            result_show = subprocess.run(
+                ['bundle', 'show', 'arcuit'],
+                capture_output=True,
+                text=True,
+                cwd=self.arclight_dir
+            )
+            arcuit_dir = result_show.stdout.strip()
+            if result_show.returncode != 0 or not arcuit_dir:
+                self.log.error(f'`bundle show arcuit` failed in {self.arclight_dir}: {result_show.stderr.strip()}')
+            else:
+                checked.append(os.path.join(arcuit_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb'))
+        except FileNotFoundError:
+            self.log.critical(
+                '`bundle` is not on the PATH, so the arcuit gem cannot be found. Run arcflow in a login '
+                'shell for the Arclight user, as cron does: '
+                f"su - <user> -c 'cd {self.arclight_dir} && python3.12 ../arcflow/arcflow/main.py ...'")
 
-        # Try 2: Check example file in arcflow root
+        # Try 2: the example file in arcflow root
         arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
         arcflow_repo_root = os.path.dirname(arcflow_package_dir)
-        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
+        checked.append(os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb'))
 
-        if os.path.exists(traject_config):
-           self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
-           self.log.info(
-               '  Note: Using example config. For production, copy this file to '
-               f'{self.arclight_dir}/lib/arcuit/traject/eac_cpf_config.rb'
-           )
-           return traject_config
+        for traject_config in checked:
+            if not os.path.exists(traject_config):
+                continue
+            if not self._reads_eac_cpf_2(traject_config):
+                self.log.critical(
+                    f'✗ {traject_config} does not read EAC-CPF 2.0. Creator records come from the '
+                    'aspace-eac-cpf-2 plugin; update the arcuit gem (UIUCLibrary/arcuit#149 or later).')
+                continue
+            self.log.info(f'✓ Using traject config: {traject_config}')
+            return traject_config
 
-        # No config found - fail
-        self.log.critical('✗ Could not find eac_cpf_config.rb')
-        self.log.critical(f'  Checked: {os.path.join(self.arclight_dir, "lib", "arcuit", "traject", "eac_cpf_config.rb")}')
-        self.log.critical(f'  Checked: {os.path.join(arcflow_repo_root, "example_eac_cpf_config.rb")}')
+        self.log.critical('✗ Could not find an EAC-CPF 2.0 eac_cpf_config.rb')
+        for traject_config in checked:
+            self.log.critical(f'  Checked: {traject_config}')
         return None
-
 
     def index_creators(self, agents_dir, creator_ids, batch_size=100):
         """
@@ -1624,6 +1653,18 @@ class ArcFlow:
         self.process_collections(num_processes, modified_since)
 
 
+    def creators_ready(self):
+        """
+        Whether creator records can be fetched and indexed: the
+        aspace-eac-cpf-2 plugin answers, and (unless indexing is skipped) an
+        EAC-CPF 2.0 traject config can be found.
+        """
+        if not self.eac_cpf_plugin_installed():
+            return False
+        if self.skip_creator_indexing:
+            return True
+        return self.find_eac_cpf_config() is not None
+
     def run_creators(self, modified_since, num_processes):
         """
         Teardown (if force_update or first run), set up directories, and
@@ -1631,6 +1672,12 @@ class ArcFlow:
         """
         xml_dir = f'{self.arclight_dir}/public/xml'
         agents_dir = f'{xml_dir}/agents'
+
+        # Check everything creators need before deleting anything: a failure
+        # after the teardown below leaves Arclight with no creator records.
+        if not self.creators_ready():
+            self.log.critical('Creator records left as they are.')
+            return
 
         if self.force_update or modified_since <= 0:
             modified_since = 0
