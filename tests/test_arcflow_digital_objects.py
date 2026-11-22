@@ -186,7 +186,7 @@ class TestDeletedRecords(unittest.TestCase):
 
         arcflow.omeka.delete.assert_called_once_with('/repositories/2/digital_objects/1')
         arcflow.delete_creator.assert_called_once_with(
-            '/arclight/public/xml/agents/3.xml', 'creator_people_3')
+            '/arclight/public/xml/agents/creator_people_3.xml', 'creator_people_3')
         self.assertEqual(arcflow.client.get.call_args_list[0].kwargs['params']['modified_since'], 5)
 
 
