@@ -376,7 +376,7 @@ class OmekaService:
                             item_data['o:media'] = item_data.get('o:media', [])
                             item_data['o:media'].append(self._prepare_media_data(
                                 file_index=i,
-                                is_public=file_access_level if is_public else False,
+                                is_public=file_access_level,
                                 title=title,
                                 label=label))
 
@@ -407,7 +407,7 @@ class OmekaService:
                                 file_name = f'{file_name[0]}_{preview_type.lower().replace(" ", "_")}.{file_name[-1]}'
                                 item_data['o:media'].append(self._prepare_media_data(
                                     file_index=i,
-                                    is_public=True if preview_type == 'No Preview'  else file_access_level,
+                                    is_public=True if preview_type == 'No Preview' else file_access_level,
                                     title=f'{title} ({preview_type})',
                                     label=f'{label} ({preview_type})',
                                     caption=caption))
@@ -419,7 +419,7 @@ class OmekaService:
                                     'file_uri': file_name,
                                     'file_format_version': file_version["file_format_version"],
                                     'caption': caption,
-                                    'publish': file_access_level,
+                                    'publish': True if preview_type == 'No Preview' else file_access_level,
                                     'jsonmodel_type': 'file_version',
                                 })
 
