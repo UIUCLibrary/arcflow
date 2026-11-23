@@ -862,7 +862,7 @@ class ArcFlow:
                 agent_type = agent_match.group('agent_type')
                 agent_id = agent_match.group('record_id')
                 self.log.info(f'Processing deleted agent ID {agent_id}...')
-                file_path = f'{agent_dir}/{agent_id}.xml'
+                file_path = f'{agent_dir}/creator_{agent_type}_{agent_id}.xml'
                 agent_solr_id = f'creator_{agent_type}_{agent_id}'
                 self.delete_creator(file_path, agent_solr_id)
 
@@ -1108,22 +1108,54 @@ class ArcFlow:
 
         return target_agents
 
-    def task_agent(self, agent_uri, agents_dir, repo_id=1):
+    # Creator records come from the aspace-eac-cpf-2 ArchivesSpace plugin, not
+    # from ArchivesSpace's /archival_contexts EAC-CPF 2010 export, which reverses
+    # hierarchical and temporal relationships and includes unpublished notes and
+    # records (UIUCLibrary/arclight#88).
+    EAC_CPF_PLUGIN_URL = 'https://github.com/UIUCLibrary/aspace-eac-cpf-2'
+
+    @staticmethod
+    def eac_cpf_endpoint(agent_type, agent_id):
+        return f'/agents/{agent_type}/{agent_id}/eac_cpf_2.xml'
+
+    @staticmethod
+    def _is_unknown_route(response):
+        """ArchivesSpace answers a route it does not have with this 404."""
+        try:
+            return response.json().get('error') == 'Sinatra::NotFound'
+        except ValueError:
+            return False
+
+    def eac_cpf_plugin_installed(self):
         """
-        Process a single agent and generate a creator document in EAC-CPF XML format.
-        Retrieves EAC-CPF directly from ArchivesSpace archival_contexts endpoint.
+        Check that ArchivesSpace serves EAC-CPF 2.0. Without the plugin every
+        creator request is a 404, which must not be mistaken for every agent
+        being unpublished.
+        """
+        response = self.client.get(self.eac_cpf_endpoint('people', 0))
+        if response.status_code == 404 and self._is_unknown_route(response):
+            self.log.critical(
+                'ArchivesSpace has no EAC-CPF 2.0 endpoint. Install the aspace-eac-cpf-2 plugin '
+                f'({self.EAC_CPF_PLUGIN_URL}) and add it to AppConfig[:plugins]. Skipping creators.')
+            return False
+        return True
+
+    def task_agent(self, agent_uri, agents_dir):
+        """
+        Process a single agent and save its creator record as EAC-CPF 2.0 XML.
+
+        An agent the plugin answers with 404 is unpublished or deleted, so its
+        creator record is removed from Solr and disk.
 
         Args:
             agent_uri: Agent URI from ArchivesSpace (e.g., '/agents/corporate_entities/123')
             agents_dir: Directory to save agent XML files
-            repo_id: Repository ID to use for archival_contexts endpoint (default: 1)
 
         Returns:
             str: Creator document ID if successful, None otherwise
         """
 
         try:
-            # Parse agent URI to extract type and ID
             # URI format: /agents/{agent_type}/{id}
             parts = agent_uri.strip('/').split('/')
             if len(parts) != 3 or parts[0] != 'agents':
@@ -1132,15 +1164,17 @@ class ArcFlow:
 
             agent_type = parts[1]  # e.g., 'corporate_entities', 'people', 'families'
             agent_id = parts[2]
+            creator_id = f'creator_{agent_type}_{agent_id}'
+            filename = f'{agents_dir}/{creator_id}.xml'
 
-            # Construct EAC-CPF endpoint
-            # Format: /repositories/{repo_id}/archival_contexts/{agent_type}/{id}.xml
-            eac_cpf_endpoint = f'/repositories/{repo_id}/archival_contexts/{agent_type}/{agent_id}.xml'
-
-            self.log.debug(f'Fetching EAC-CPF from: {eac_cpf_endpoint}')
-
-            # Fetch EAC-CPF XML
+            eac_cpf_endpoint = self.eac_cpf_endpoint(agent_type, agent_id)
+            self.log.debug(f'Fetching EAC-CPF 2.0 from: {eac_cpf_endpoint}')
             response = self.client.get(eac_cpf_endpoint)
+
+            if response.status_code == 404 and not self._is_unknown_route(response):
+                self.log.info(f'{agent_uri} is not published; removing creator record {creator_id}')
+                self.delete_creator(filename, creator_id)
+                return None
 
             if response.status_code != 200:
                 self.log.error(f'Failed to fetch EAC-CPF for {agent_uri}: HTTP {response.status_code}')
@@ -1148,19 +1182,10 @@ class ArcFlow:
 
             eac_cpf_xml = response.text
 
-            # Validate EAC-CPF XML structure
-            if not self.xml_transform.validate_eac_cpf_xml(eac_cpf_xml, agent_uri):
+            if self.xml_transform.validate_eac_cpf_xml(eac_cpf_xml, agent_uri) is None:
                 self.log.error(f'Invalid EAC-CPF XML for {agent_uri}, skipping')
                 return None
 
-            # Add collection ead_ids to resourceRelation creatorOf elements
-            eac_cpf_xml = self.xml_transform.add_collection_links_to_eac_cpf(eac_cpf_xml)
-
-            # Generate creator ID
-            creator_id = f'creator_{agent_type}_{agent_id}'
-
-            # Save EAC-CPF XML to file
-            filename = f'{agents_dir}/{creator_id}.xml'
             os.makedirs(agents_dir, exist_ok=True)
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(eac_cpf_xml)
@@ -1195,7 +1220,7 @@ class ArcFlow:
             # Process agents in parallel
             results_agents = [pool.apply_async(
                 self.task_agent,
-                args=(agent_uri_item, agents_dir, 1))  # Use repo_id=1
+                args=(agent_uri_item, agents_dir))
                 for agent_uri_item in agents]
 
             creator_ids = [r.get() for r in results_agents]
@@ -1231,52 +1256,84 @@ class ArcFlow:
         return creator_ids
 
 
+    EAC_CPF_2_NAMESPACE = 'https://archivists.org/ns/eac/v2'
+
+    def _reads_eac_cpf_2(self, traject_config):
+        """
+        Whether a traject config reads EAC-CPF 2.0. Arcuit keeps the namespace
+        in a helper next to the config, so the config's directory is searched.
+        A config for EAC-CPF 2010 does not fail on 2.0 records: it indexes
+        them with empty titles, so it has to be caught before it runs.
+        """
+        config_dir = os.path.dirname(traject_config)
+        candidates = [traject_config] + sorted(
+            os.path.join(config_dir, f) for f in os.listdir(config_dir) if f.endswith('.rb'))
+        for path in candidates:
+            try:
+                with open(path, encoding='utf-8') as f:
+                    if self.EAC_CPF_2_NAMESPACE in f.read():
+                        return True
+            except OSError:
+                continue
+        return False
+
     def find_eac_cpf_config(self):
         """
         Find the traject config for creator indexing.
 
         Search order:
-        1. {arclight_dir}/lib/arcuit/traject/eac_cpf_config.rb
-        2. example_eac_cpf_config.rb in arcflow root
+        1. lib/arcuit/traject/eac_cpf_config.rb in the arcuit gem the Arclight app bundles
+        2. example_traject_config_eac_cpf.rb in arcflow root
         3. Fail
+
+        A config is only used if it reads EAC-CPF 2.0, the format the
+        aspace-eac-cpf-2 plugin exports.
 
         Returns:
            str: Path to traject config, or None if not found
         """
         self.log.info('Searching for eac_cpf_config.rb...')
+        checked = []
 
-        # Try 1: Check arclight directory
-        result_show = subprocess.run(
-            ['bundle', 'show', 'arcuit'],
-            capture_output=True,
-            text=True,
-            cwd=self.arclight_dir
-        )
-        arcuit_dir = result_show.stdout.strip()
-        traject_config = os.path.join(arcuit_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb')
-        if os.path.exists(traject_config):
-           self.log.info(f'✓ Using traject config from arclight: {traject_config}')
-           return traject_config
+        # Try 1: the arcuit gem the Arclight app uses
+        try:
+            result_show = subprocess.run(
+                ['bundle', 'show', 'arcuit'],
+                capture_output=True,
+                text=True,
+                cwd=self.arclight_dir
+            )
+            arcuit_dir = result_show.stdout.strip()
+            if result_show.returncode != 0 or not arcuit_dir:
+                self.log.error(f'`bundle show arcuit` failed in {self.arclight_dir}: {result_show.stderr.strip()}')
+            else:
+                checked.append(os.path.join(arcuit_dir, 'lib', 'arcuit', 'traject', 'eac_cpf_config.rb'))
+        except FileNotFoundError:
+            self.log.critical(
+                '`bundle` is not on the PATH, so the arcuit gem cannot be found. Run arcflow in a login '
+                'shell for the Arclight user, as cron does: '
+                f"su - <user> -c 'cd {self.arclight_dir} && python3.12 ../arcflow/arcflow/main.py ...'")
 
-        # Try 2: Check example file in arcflow root
+        # Try 2: the example file in arcflow root
         arcflow_package_dir = os.path.dirname(os.path.abspath(__file__))
         arcflow_repo_root = os.path.dirname(arcflow_package_dir)
-        traject_config = os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb')
+        checked.append(os.path.join(arcflow_repo_root, 'example_traject_config_eac_cpf.rb'))
 
-        if os.path.exists(traject_config):
-           self.log.info(f'✓ Using example traject config from arcflow: {traject_config}')
-           self.log.info(
-               '  Note: Using example config. For production, copy this file to '
-               f'{self.arclight_dir}/lib/arcuit/traject/eac_cpf_config.rb'
-           )
-           return traject_config
+        for traject_config in checked:
+            if not os.path.exists(traject_config):
+                continue
+            if not self._reads_eac_cpf_2(traject_config):
+                self.log.critical(
+                    f'✗ {traject_config} does not read EAC-CPF 2.0. Creator records come from the '
+                    'aspace-eac-cpf-2 plugin; update the arcuit gem (UIUCLibrary/arcuit#149 or later).')
+                continue
+            self.log.info(f'✓ Using traject config: {traject_config}')
+            return traject_config
 
-        # No config found - fail
-        self.log.critical('✗ Could not find eac_cpf_config.rb')
-        self.log.critical(f'  Checked: {os.path.join(self.arclight_dir, "lib", "arcuit", "traject", "eac_cpf_config.rb")}')
-        self.log.critical(f'  Checked: {os.path.join(arcflow_repo_root, "example_eac_cpf_config.rb")}')
+        self.log.critical('✗ Could not find an EAC-CPF 2.0 eac_cpf_config.rb')
+        for traject_config in checked:
+            self.log.critical(f'  Checked: {traject_config}')
         return None
-
 
     def index_creators(self, agents_dir, creator_ids, batch_size=100):
         """
@@ -1596,6 +1653,18 @@ class ArcFlow:
         self.process_collections(num_processes, modified_since)
 
 
+    def creators_ready(self):
+        """
+        Whether creator records can be fetched and indexed: the
+        aspace-eac-cpf-2 plugin answers, and (unless indexing is skipped) an
+        EAC-CPF 2.0 traject config can be found.
+        """
+        if not self.eac_cpf_plugin_installed():
+            return False
+        if self.skip_creator_indexing:
+            return True
+        return self.find_eac_cpf_config() is not None
+
     def run_creators(self, modified_since, num_processes):
         """
         Teardown (if force_update or first run), set up directories, and
@@ -1603,6 +1672,12 @@ class ArcFlow:
         """
         xml_dir = f'{self.arclight_dir}/public/xml'
         agents_dir = f'{xml_dir}/agents'
+
+        # Check everything creators need before deleting anything: a failure
+        # after the teardown below leaves Arclight with no creator records.
+        if not self.creators_ready():
+            self.log.critical('Creator records left as they are.')
+            return
 
         if self.force_update or modified_since <= 0:
             modified_since = 0

@@ -23,21 +23,6 @@ REAL_EAD_WITH_NAMESPACE = '''<?xml version="1.0" encoding="UTF-8"?>
 </ead>'''
 
 # Real EAC-CPF fixture with namespace
-REAL_EAC_CPF_WITH_NAMESPACE = '''<?xml version="1.0" encoding="UTF-8"?>
-<eac-cpf xmlns="urn:isbn:1-931666-33-4" xmlns:xlink="http://www.w3.org/1999/xlink">
-  <control>
-    <recordId>test-agent</recordId>
-  </control>
-  <cpfDescription>
-    <relations>
-      <resourceRelation resourceRelationType="creatorOf" 
-                       xlink:href="https://aspace.test/repositories/2/resources/123">
-        <relationEntry>Test Collection</relationEntry>
-      </resourceRelation>
-    </relations>
-  </cpfDescription>
-</eac-cpf>'''
-
 class TestXmlTransformService(unittest.TestCase):
     """Test cases for XmlTransformService."""
 
@@ -178,23 +163,6 @@ class TestXmlTransformService(unittest.TestCase):
         self.assertIn('Group &amp; Co &lt;test&gt;', result)
         self.assertNotIn('Group & Co <test>', result)
 
-    def test_add_collection_links_to_eac_cpf(self):
-        """Test adding ead_id descriptiveNote to resourceRelation elements."""
-
-        # Mock the client response
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {'ead_id': 'TEST.1.2.3'}
-        self.mock_client.get.return_value = mock_response
-
-        result = self.service.add_collection_links_to_eac_cpf(REAL_EAC_CPF_WITH_NAMESPACE)
-
-        # Should add descriptiveNote (namespace-aware check)
-        self.assertIn('descriptiveNote', result)
-        self.assertIn('ead_id:TEST.1.2.3', result)
-        # Should preserve EAC-CPF namespace
-        self.assertIn('urn:isbn:1-931666-33-4', result)
-
     def test_multiple_creators_with_namespace(self):
         """Test handling multiple creators when EAD has default namespace."""
         xml_with_namespace = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -225,59 +193,6 @@ class TestXmlTransformService(unittest.TestCase):
         self.assertIn('creator_id="creator_people_456"', result)
         # Should preserve namespace
         self.assertIn('urn:isbn:1-931666-22-9', result)
-
-    def test_add_collection_links_idempotent(self):
-        """Test that adding collection links is idempotent."""
-        eac_cpf_xml = '''<eac-cpf>
-<resourceRelation resourceRelationType="creatorOf" xlink:href="https://aspace.test/repositories/2/resources/123">
-  <relationEntry>Test Collection</relationEntry>
-  <descriptiveNote>
-    <p>ead_id:TEST.1.2.3</p>
-  </descriptiveNote>
-</resourceRelation>
-</eac-cpf>'''
-
-        result = self.service.add_collection_links_to_eac_cpf(eac_cpf_xml)
-
-        # Should not call the client since descriptiveNote already exists
-        self.mock_client.get.assert_not_called()
-        # Should return unchanged XML
-        self.assertEqual(eac_cpf_xml, result)
-
-    def test_add_collection_links_skips_digital_objects(self):
-        """Test that digital object URLs are skipped silently."""
-        eac_cpf_xml = '''<eac-cpf>
-<resourceRelation resourceRelationType="creatorOf" xlink:href="https://aspace.test/repositories/2/digital_objects/123">
-  <relationEntry>Test Digital Object</relationEntry>
-</resourceRelation>
-</eac-cpf>'''
-
-        result = self.service.add_collection_links_to_eac_cpf(eac_cpf_xml)
-
-        # Should not call the client
-        self.mock_client.get.assert_not_called()
-        # Should return unchanged XML
-        self.assertEqual(eac_cpf_xml, result)
-
-    def test_add_collection_links_handles_fetch_errors(self):
-        """Test that fetch errors are handled gracefully."""
-        eac_cpf_xml = '''<eac-cpf>
-<resourceRelation resourceRelationType="creatorOf" xlink:href="https://aspace.test/repositories/2/resources/123">
-  <relationEntry>Test Collection</relationEntry>
-</resourceRelation>
-</eac-cpf>'''
-
-        # Mock a 404 response
-        mock_response = Mock()
-        mock_response.status_code = 404
-        self.mock_client.get.return_value = mock_response
-
-        result = self.service.add_collection_links_to_eac_cpf(eac_cpf_xml)
-
-        # Should log a warning
-        self.mock_log.warning.assert_called()
-        # Should return unchanged XML
-        self.assertNotIn('<descriptiveNote>', result)
 
     def test_build_bioghist_element(self):
         """Test building bioghist XML element from structured data."""
@@ -344,15 +259,6 @@ class TestXmlTransformService(unittest.TestCase):
         self.assertIsNone(root)
         self.mock_log.error.assert_called()
 
-    def test_add_collection_links_requires_client(self):
-        """Test that add_collection_links_to_eac_cpf requires a client."""
-        service_no_client = XmlTransformService(client=None)
-
-        with self.assertRaises(ValueError) as context:
-            service_no_client.add_collection_links_to_eac_cpf('<eac-cpf></eac-cpf>')
-
-        self.assertIn('Client is required', str(context.exception))
-
     def test_namespace_preservation_ead_with_declaration(self):
         """Test that EAD namespace prefixes and XML declaration are preserved."""
         xml_input = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -400,50 +306,6 @@ class TestXmlTransformService(unittest.TestCase):
         self.assertIn('<archdesc ', result)
         self.assertNotIn('<ns0:ead', result)
 
-    def test_namespace_preservation_eac_cpf_with_declaration(self):
-        """Test that EAC-CPF namespace prefixes and XML declaration are preserved."""
-        xml_input = '''<?xml version="1.0" encoding="UTF-8"?>
-<eac-cpf xmlns="urn:isbn:1-931666-33-4" xmlns:xlink="http://www.w3.org/1999/xlink">
-  <control>
-    <recordId>test-agent</recordId>
-  </control>
-  <cpfDescription>
-    <relations>
-      <resourceRelation resourceRelationType="creatorOf" 
-                       xlink:href="https://aspace.test/repositories/2/resources/123">
-        <relationEntry>Test Collection</relationEntry>
-      </resourceRelation>
-    </relations>
-  </cpfDescription>
-</eac-cpf>'''
-        
-        # Mock the client response
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {'ead_id': 'TEST.1.2.3'}
-        self.mock_client.get.return_value = mock_response
-        
-        result = self.service.add_collection_links_to_eac_cpf(xml_input)
-        
-        # Should have XML declaration
-        self.assertTrue(result.startswith('<?xml'), 'XML declaration should be preserved')
-        self.assertIn('version', result[:50])  # Check in first 50 chars
-        self.assertIn('1.0', result[:50])
-        self.assertIn('encoding', result[:50])
-        self.assertIn('UTF-8', result[:50])
-        
-        # Should preserve default EAC-CPF namespace (not rewrite to ns0:)
-        self.assertIn('xmlns="urn:isbn:1-931666-33-4"', result)
-        self.assertNotIn('ns0:', result, 'Default namespace should not be rewritten to ns0:')
-        
-        # Should preserve xlink namespace
-        self.assertIn('xmlns:xlink="http://www.w3.org/1999/xlink"', result)
-        
-        # Tags should use default namespace, not prefixed
-        self.assertIn('<eac-cpf ', result)
-        self.assertIn('<resourceRelation ', result)
-        self.assertNotIn('<ns0:eac-cpf', result)
-
     def test_namespace_preservation_inject_metadata(self):
         """Test that inject_collection_metadata preserves namespaces."""
         xml_input = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -485,21 +347,6 @@ class TestXmlTransformService(unittest.TestCase):
         self.assertIn('<subgroup>', result)
         self.assertIn('<bioghist ', result)
         self.assertNotIn('<ns0:recordgroup', result)
-
-    def test_namespace_preservation_no_declaration_maintained(self):
-        """Test that documents without XML declaration remain without it when no changes made."""
-        xml_input = '''<eac-cpf>
-<control>
-  <recordId>test-agent</recordId>
-</control>
-</eac-cpf>'''
-        
-        # No changes will be made (no resourceRelations)
-        result = self.service.add_collection_links_to_eac_cpf(xml_input)
-        
-        # Should not add XML declaration when original didn't have one and no changes made
-        self.assertEqual(xml_input, result, 'Unchanged XML should be returned as-is')
-        self.assertFalse(result.startswith('<?xml'), 'Should not add XML declaration to unchanged document')
 
 
 if __name__ == '__main__':
